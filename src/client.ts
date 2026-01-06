@@ -1,3 +1,11 @@
+/**
+ * Superflag client for React Native.
+ *
+ * IMPORTANT: See docs/react-native-library-rules.md for why this code is structured this way.
+ * - Checks AbortController exists before using (Rule 1)
+ * - All operations wrapped in try/catch (Rule 4)
+ */
+
 import type {
   SuperflagState,
   ClientConfig,
@@ -21,7 +29,8 @@ export function createClient(config: ClientConfig): SuperflagClient {
   let destroyed = false
   let fetchController: AbortController | null = null
 
-  // Check if AbortController exists (Hermes may not have it)
+  // Hermes may not have AbortController - check before using
+  // See: docs/react-native-library-rules.md#rule-1-no-browser-api-assumptions
   const hasAbortController = typeof AbortController !== "undefined"
 
   function setState(updates: Partial<SuperflagState>): void {
