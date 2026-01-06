@@ -1,19 +1,22 @@
-import AsyncStorage from "@react-native-async-storage/async-storage"
-
 /**
  * Cache key used for storing config
  */
 export const CACHE_KEY = "superflag:cache:v1"
 
 /**
- * Storage adapter using AsyncStorage.
- * All operations are wrapped in try/catch to prevent crashes
- * if AsyncStorage isn't ready or throws unexpectedly.
+ * Lazy-load AsyncStorage to avoid module-load-time crashes.
+ * Using require() instead of import defers native module resolution
+ * until the function is called, ensuring the native bridge is ready.
  */
+function getAsyncStorage() {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("@react-native-async-storage/async-storage").default
+}
+
 export const storage = {
   async getItem(key: string): Promise<string | null> {
     try {
-      return await AsyncStorage.getItem(key)
+      return await getAsyncStorage().getItem(key)
     } catch {
       return null
     }
@@ -21,15 +24,15 @@ export const storage = {
 
   async setItem(key: string, value: string): Promise<void> {
     try {
-      await AsyncStorage.setItem(key, value)
+      await getAsyncStorage().setItem(key, value)
     } catch {
-      // Silently fail - caching is best-effort
+      // Silently fail - don't crash the app
     }
   },
 
   async removeItem(key: string): Promise<void> {
     try {
-      await AsyncStorage.removeItem(key)
+      await getAsyncStorage().removeItem(key)
     } catch {
       // Silently fail
     }

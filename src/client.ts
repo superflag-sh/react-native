@@ -21,6 +21,9 @@ export function createClient(config: ClientConfig): SuperflagClient {
   let destroyed = false
   let fetchController: AbortController | null = null
 
+  // Check if AbortController exists (Hermes may not have it)
+  const hasAbortController = typeof AbortController !== "undefined"
+
   function setState(updates: Partial<SuperflagState>): void {
     if (destroyed) return
     state = { ...state, ...updates }
@@ -56,12 +59,12 @@ export function createClient(config: ClientConfig): SuperflagClient {
   async function fetchConfig(): Promise<void> {
     if (destroyed) return
 
-    // Cancel any in-flight request
-    if (fetchController) {
+    // Cancel any in-flight request (only if AbortController exists)
+    if (hasAbortController && fetchController) {
       fetchController.abort()
     }
 
-    fetchController = new AbortController()
+    fetchController = hasAbortController ? new AbortController() : null
 
     // Only show loading if we don't have flags yet
     if (Object.keys(state.flags).length === 0) {
@@ -79,7 +82,7 @@ export function createClient(config: ClientConfig): SuperflagClient {
 
       const response = await fetch(`${BASE_URL}/api/v1/public-config`, {
         headers,
-        signal: fetchController.signal,
+        signal: fetchController?.signal,
       })
 
       if (destroyed) return
@@ -189,7 +192,7 @@ export function createClient(config: ClientConfig): SuperflagClient {
 
   function destroy(): void {
     destroyed = true
-    if (fetchController) {
+    if (hasAbortController && fetchController) {
       fetchController.abort()
       fetchController = null
     }
