@@ -7,18 +7,31 @@ export const CACHE_KEY = "superflag:cache:v1"
 
 /**
  * Storage adapter using AsyncStorage.
- * This is a static import - no dynamic detection needed.
+ * All operations are wrapped in try/catch to prevent crashes
+ * if AsyncStorage isn't ready or throws unexpectedly.
  */
 export const storage = {
   async getItem(key: string): Promise<string | null> {
-    return AsyncStorage.getItem(key)
+    try {
+      return await AsyncStorage.getItem(key)
+    } catch {
+      return null
+    }
   },
 
   async setItem(key: string, value: string): Promise<void> {
-    await AsyncStorage.setItem(key, value)
+    try {
+      await AsyncStorage.setItem(key, value)
+    } catch {
+      // Silently fail - caching is best-effort
+    }
   },
 
   async removeItem(key: string): Promise<void> {
-    await AsyncStorage.removeItem(key)
+    try {
+      await AsyncStorage.removeItem(key)
+    } catch {
+      // Silently fail
+    }
   },
 }

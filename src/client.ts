@@ -161,22 +161,30 @@ export function createClient(config: ClientConfig): SuperflagClient {
   async function initialize(): Promise<void> {
     if (destroyed) return
 
-    // Load from cache first
-    const cached = await loadFromCache()
+    try {
+      // Load from cache first
+      const cached = await loadFromCache()
 
-    if (cached) {
-      // Show cached data immediately
+      if (cached) {
+        // Show cached data immediately
+        setState({
+          flags: cached.flags,
+          status: "ready",
+          version: cached.version,
+          etag: cached.etag,
+          lastFetchedAt: cached.fetchedAt,
+        })
+      }
+
+      // Always fetch on app start - ETag ensures we only download if changed
+      await fetchConfig()
+    } catch {
+      // Initialization failed but don't crash the app
       setState({
-        flags: cached.flags,
-        status: "ready",
-        version: cached.version,
-        etag: cached.etag,
-        lastFetchedAt: cached.fetchedAt,
+        status: "error",
+        error: "Failed to initialize",
       })
     }
-
-    // Always fetch on app start - ETag ensures we only download if changed
-    await fetchConfig()
   }
 
   function destroy(): void {
