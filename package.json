@@ -1,6 +1,6 @@
 {
   "name": "@superflag-sh/react-native",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "React Native SDK for Superflag feature flags",
   "type": "module",
   "main": "./dist/index.js",
