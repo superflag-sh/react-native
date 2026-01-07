@@ -10,6 +10,7 @@ import { createClient } from "./client"
 export function SuperflagProvider({
   clientKey: propKey,
   ttlSeconds = 60,
+  userId,
   children,
 }: SuperflagProviderProps): JSX.Element {
   const [state, setState] = useState<SuperflagState>(initialState)
@@ -33,6 +34,7 @@ export function SuperflagProvider({
         const client = createClient({
           clientKey,
           ttlSeconds,
+          userId,
           onStateChange: (s) => {
             if (!destroyed) setState(s)
           },
@@ -65,7 +67,7 @@ export function SuperflagProvider({
       destroyed = true
       cleanup?.()
     }
-  }, [propKey, ttlSeconds])
+  }, [propKey, ttlSeconds, userId])
 
   return (
     <SuperflagContext.Provider value={state}>

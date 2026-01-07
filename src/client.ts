@@ -23,9 +23,9 @@ const BASE_URL = "https://superflag.sh"
  * Creates a Superflag client that manages flag fetching and caching
  */
 export function createClient(config: ClientConfig): SuperflagClient {
-  const { clientKey, onStateChange } = config
+  const { clientKey, onStateChange, userId } = config
 
-  let state: SuperflagState = { ...initialState }
+  let state: SuperflagState = { ...initialState, userId }
   let destroyed = false
   let fetchController: AbortController | null = null
 
