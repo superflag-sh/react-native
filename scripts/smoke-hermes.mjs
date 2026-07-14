@@ -54,8 +54,8 @@ try {
   )
   writeFileSync(
     join(temp, "index.js"),
-    'import { SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } from "@superflag-sh/react-native";\n' +
-      "const exportsUnderTest = [SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag];\n" +
+    'import { SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } from "@superflag-sh/react-native";\n' +
+      "const exportsUnderTest = [SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag];\n" +
       'if (!exportsUnderTest.every((value) => typeof value === "function")) throw new Error("SDK startup exports missing");\n' +
       'globalThis.__SUPERFLAG_HERMES_SMOKE__ = "ok";\n',
   )

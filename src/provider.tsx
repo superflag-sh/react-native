@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react"
 import { createClient } from "./client.js"
 import { SuperflagContext, initialState } from "./context.js"
 import { resolveEvaluationContext } from "./evaluation.js"
@@ -42,7 +42,7 @@ export function SuperflagProvider({
   onEvaluation,
   onExposure,
   children,
-}: SuperflagProviderProps): JSX.Element {
+}: SuperflagProviderProps): ReactElement {
   const evaluationContext = useMemo(
     () => resolveEvaluationContext({ context, targetingKey, attributes, userId }),
     [context, targetingKey, attributes, userId],

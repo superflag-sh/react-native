@@ -1,6 +1,6 @@
 {
   "name": "@superflag-sh/react-native",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "React Native SDK for Superflag feature flags",
   "type": "module",
   "main": "./dist/cjs/index.js",
@@ -58,6 +58,7 @@
     "check:cache-drift": "node scripts/check-cache-drift.mjs",
     "smoke:package": "node scripts/smoke-package.mjs",
     "smoke:hermes": "node scripts/smoke-hermes.mjs",
+    "smoke:registry": "node scripts/smoke-registry.mjs",
     "release:check": "bun run test && bun run typecheck && bun run check:cache-drift && bun run build && bun run smoke:package && bun run smoke:hermes",
     "prepack": "bun run build",
     "prepublishOnly": "bun run release:check"
