@@ -1,15 +1,53 @@
-// Provider
-export { SuperflagProvider } from "./provider"
-
-// Hooks
-export { useFlag, useFlags } from "./hooks"
-
-// Types
+export { SuperflagProvider } from "./provider.js"
+export {
+  createTypedHooks,
+  useBooleanFlag,
+  useBooleanFlagDetails,
+  useEvaluationDetails,
+  useFlag,
+  useFlagDetails,
+  useFlags,
+  useNumberFlag,
+  useNumberFlagDetails,
+  useObjectFlag,
+  useObjectFlagDetails,
+  useStringFlag,
+  useStringFlagDetails,
+  useSuperflagClient,
+  useTypedFlag,
+} from "./hooks.js"
+export type { UseFlagsResult } from "./hooks.js"
 export type {
-  FlagType,
+  AppStateAdapter,
+  AppStateSubscription,
+  CachedConfig,
+  ConfigResponse,
+  DiagnosticCode,
+  DiagnosticEvent,
+  EvaluationContext,
+  EvaluationDetails,
+  EvaluationEvent,
+  EvaluationOptions,
+  ExposureEvent,
+  FlagConfig,
+  FlagKey,
   FlagValue,
+  FlagValueFor,
   Flags,
-  SuperflagStatus,
-  SuperflagState,
+  JsonValue,
+  LegacyFlagValue,
+  NetworkAdapter,
+  ObjectFlagValue,
+  RefreshReason,
+  RetryOptions,
+  StorageAdapter,
+  SuperflagClient,
   SuperflagProviderProps,
-} from "./types"
+  SuperflagSource,
+  SuperflagState,
+  SuperflagStatus,
+  TypedEvaluationDetails,
+  TypedFlagValues,
+  TypedSuperflagClient,
+  TypedSuperflagHooks,
+} from "./types.js"

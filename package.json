@@ -1,14 +1,19 @@
 {
   "name": "@superflag-sh/react-native",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "React Native SDK for Superflag feature flags",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "react-native": "./dist/esm/index.js",
+  "types": "./dist/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/types/index.d.ts",
+      "react-native": "./dist/esm/index.js",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "default": "./dist/esm/index.js"
     }
   },
   "files": [
@@ -17,7 +22,10 @@
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "https://github.com/superflag-sh/react-native"
+    "url": "git+https://github.com/superflag-sh/react-native.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "feature-flags",
@@ -27,8 +35,12 @@
   ],
   "author": "Superflag",
   "license": "MIT",
+  "dependencies": {
+    "@superflag-sh/core": "^0.1.0"
+  },
   "peerDependencies": {
     "react": ">=18",
+    "react-native": ">=0.65 <1",
     "@react-native-async-storage/async-storage": ">=1.0.0"
   },
   "devDependencies": {
@@ -39,9 +51,15 @@
     "typescript": "^5.0.0"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc",
+    "build": "rm -rf dist && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && tsc -p tsconfig.types.json && cp scripts/cjs-package.json dist/cjs/package.json",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
-    "test:watch": "bun test --watch"
+    "test": "bun test src",
+    "test:watch": "bun test --watch src",
+    "check:cache-drift": "node scripts/check-cache-drift.mjs",
+    "smoke:package": "node scripts/smoke-package.mjs",
+    "smoke:hermes": "node scripts/smoke-hermes.mjs",
+    "release:check": "bun run test && bun run typecheck && bun run check:cache-drift && bun run build && bun run smoke:package && bun run smoke:hermes",
+    "prepack": "bun run build",
+    "prepublishOnly": "bun run release:check"
   }
 }

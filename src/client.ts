@@ -1,215 +1,652 @@
 /**
- * Superflag client for React Native.
- *
- * IMPORTANT: See docs/react-native-library-rules.md for why this code is structured this way.
- * - Checks AbortController exists before using (Rule 1)
- * - All operations wrapped in try/catch (Rule 4)
+ * React Native transport/cache/lifecycle adapter.
+ * Native modules are lazy and every asynchronous boundary is contained for Expo/Hermes safety.
  */
-
 import type {
-  SuperflagState,
+  AppStateAdapter,
+  AppStateSubscription,
+  CachedConfig,
   ClientConfig,
   ConfigResponse,
-  CachedConfig,
-  Flags,
+  DiagnosticEvent,
+  EvaluationContext,
+  FlagConfig,
+  NetworkAdapter,
+  RefreshReason,
+  RetryOptions,
+  StorageAdapter,
   SuperflagClient,
-} from "./types"
-import { storage, CACHE_KEY } from "./storage"
-import { initialState } from "./context"
+  SuperflagState,
+} from "./types.js"
+import {
+  CACHE_SCHEMA_VERSION,
+  LEGACY_CACHE_KEYS,
+  createCacheKey,
+  createCacheScope,
+  createPersistedCacheBinding,
+  isCachedConfig,
+  isPersistedCacheBinding,
+  type PersistedCacheBinding,
+} from "./cache.js"
+import { isConfigResponse, normalizeConfigResponse } from "./config.js"
+import { validateCachedConfig } from "./config.js"
+import { initialState } from "./context.js"
+import { storage as defaultStorage } from "./storage.js"
 
-const BASE_URL = "https://superflag.sh"
+const DEFAULT_CONFIG_URL = "https://superflag.sh/api/v1/public-config"
+const DEFAULT_MAX_STALE_AGE_SECONDS = 24 * 60 * 60
+const DEFAULT_RETRY: RetryOptions = {
+  maxRetries: 2,
+  baseDelayMs: 250,
+  maxDelayMs: 2_000,
+}
+const MAX_TIMEOUT_MS = 2_147_483_647
 
-/**
- * Creates a Superflag client that manages flag fetching and caching
- */
+interface ReactNativeModule {
+  AppState?: AppStateAdapter
+}
+
+function guardedAppState(): AppStateAdapter | null {
+  try {
+    // Intentionally lazy: static React Native imports can crash before the bridge is ready.
+    const native = require("react-native") as ReactNativeModule
+    return native.AppState ?? null
+  } catch {
+    return null
+  }
+}
+
+function removeSubscription(subscription: AppStateSubscription | (() => void) | null): void {
+  try {
+    if (typeof subscription === "function") subscription()
+    else subscription?.remove()
+  } catch {
+    // Cleanup must remain idempotent and non-throwing.
+  }
+}
+
+function errorMessage(error: unknown, fallback = "Network error"): string {
+  return error instanceof Error ? error.message : fallback
+}
+
+class RetryableResponseError extends Error {
+  constructor(readonly status: number) {
+    super(`Server error: ${status}`)
+    this.name = "RetryableResponseError"
+  }
+}
+
 export function createClient(config: ClientConfig): SuperflagClient {
-  const { clientKey, onStateChange, userId } = config
+  const { clientKey } = config
+  const cacheStorage: StorageAdapter = config.storage ?? defaultStorage
+  const scope = createCacheScope(config.configUrl ?? DEFAULT_CONFIG_URL, clientKey)
+  const now = config.now ?? Date.now
+  const ttlMs = Math.max(1_000, config.ttlSeconds * 1_000)
+  const maxStaleMs = Math.max(
+    0,
+    (config.maxStaleAgeSeconds ?? DEFAULT_MAX_STALE_AGE_SECONDS) * 1_000,
+  )
+  const retry: RetryOptions = {
+    maxRetries: Math.max(0, Math.min(10, Math.floor(config.retry?.maxRetries ?? DEFAULT_RETRY.maxRetries))),
+    baseDelayMs: Math.max(0, config.retry?.baseDelayMs ?? DEFAULT_RETRY.baseDelayMs),
+    maxDelayMs: Math.max(0, config.retry?.maxDelayMs ?? DEFAULT_RETRY.maxDelayMs),
+  }
 
-  let state: SuperflagState = { ...initialState, userId }
+  let state: SuperflagState = {
+    ...initialState,
+    evaluationContext: config.evaluationContext,
+    ...(config.userId ? { userId: config.userId } : {}),
+    refresh: () => refresh("manual"),
+  }
   let destroyed = false
+  let initialized = false
+  let readyEmitted = false
+  let inFlight: Promise<void> | null = null
   let fetchController: AbortController | null = null
-
-  // Hermes may not have AbortController - check before using
-  // See: docs/react-native-library-rules.md#rule-1-no-browser-api-assumptions
+  let activeBinding: PersistedCacheBinding | null = null
+  let activeCache: CachedConfig | null = null
+  let ttlTimer: ReturnType<typeof setTimeout> | null = null
+  let maxStaleTimer: ReturnType<typeof setTimeout> | null = null
+  let appStateSubscription: AppStateSubscription | (() => void) | null = null
+  let networkSubscription: AppStateSubscription | (() => void) | null = null
+  let currentAppState: string | null | undefined
+  let connected: boolean | undefined
+  const delayTimers = new Map<ReturnType<typeof setTimeout>, () => void>()
   const hasAbortController = typeof AbortController !== "undefined"
+
+  function emitDiagnostic(event: Omit<DiagnosticEvent, "timestamp">): void {
+    if (!config.onDiagnostic) return
+    try {
+      Promise.resolve(config.onDiagnostic({ ...event, timestamp: now() })).catch(() => {})
+    } catch {
+      // Diagnostic handlers are the last error boundary.
+    }
+  }
+
+  function invokeCallback(
+    name: "onReady",
+    callback: ClientConfig["onReady"],
+    value: SuperflagState,
+  ): void {
+    if (!callback) return
+    try {
+      Promise.resolve(callback(value)).catch((error: unknown) => {
+        emitDiagnostic({
+          code: "callback_failed",
+          message: `${name} callback failed`,
+          error,
+        })
+      })
+    } catch (error) {
+      emitDiagnostic({ code: "callback_failed", message: `${name} callback failed`, error })
+    }
+  }
+
+  function withDerivedState(next: SuperflagState): SuperflagState {
+    const age = next.fetchedAt === null ? null : Math.max(0, now() - next.fetchedAt) / 1_000
+    return { ...next, age, stale: age !== null && age >= ttlMs / 1_000 }
+  }
 
   function setState(updates: Partial<SuperflagState>): void {
     if (destroyed) return
-    state = { ...state, ...updates }
-    onStateChange(state)
+    state = withDerivedState({ ...state, ...updates })
+    try {
+      config.onStateChange(state)
+    } catch (error) {
+      emitDiagnostic({ code: "callback_failed", message: "onStateChange callback failed", error })
+    }
+
+    if (!readyEmitted && state.config && (state.status === "ready" || state.status === "refreshing")) {
+      readyEmitted = true
+      invokeCallback("onReady", config.onReady, state)
+    }
+  }
+
+  function clearRefreshTimers(): void {
+    if (ttlTimer !== null) clearTimeout(ttlTimer)
+    if (maxStaleTimer !== null) clearTimeout(maxStaleTimer)
+    ttlTimer = null
+    maxStaleTimer = null
+  }
+
+  function scheduleConfigTimers(fetchedAt: number, deferRefresh = false): void {
+    clearRefreshTimers()
+    if (destroyed) return
+
+    const age = Math.max(0, now() - fetchedAt)
+    const refreshDelay = Math.min(
+      MAX_TIMEOUT_MS,
+      deferRefresh ? ttlMs : Math.max(0, ttlMs - age),
+    )
+    ttlTimer = setTimeout(() => {
+      ttlTimer = null
+      void refresh("ttl")
+    }, refreshDelay)
+
+    const staleDelay = Math.min(MAX_TIMEOUT_MS, Math.max(0, maxStaleMs - age))
+    maxStaleTimer = setTimeout(() => {
+      maxStaleTimer = null
+      if (destroyed || state.fetchedAt !== fetchedAt) return
+      void clearActiveCache()
+      setState({
+        config: null,
+        flags: {},
+        status: "error",
+        source: "none",
+        error: "Cached config exceeded maxStaleAgeSeconds",
+        fetchedAt: null,
+        configVersion: null,
+        appId: null,
+        environment: null,
+        version: null,
+        etag: null,
+      })
+    }, staleDelay)
+  }
+
+  async function removeCacheKeys(keys: readonly string[]): Promise<void> {
+    for (const key of keys) {
+      try {
+        await cacheStorage.removeItem(key)
+      } catch (error) {
+        emitDiagnostic({ code: "cache_write_failed", message: `Could not remove cache key ${key}`, error })
+      }
+    }
+  }
+
+  async function clearActiveCache(binding = activeBinding): Promise<void> {
+    activeCache = null
+    if (binding) await removeCacheKeys([createCacheKey(scope, binding)])
+  }
+
+  async function clearBindingAndCache(): Promise<void> {
+    const binding = activeBinding
+    activeBinding = null
+    await clearActiveCache(binding)
+    await removeCacheKeys([scope.bindingKey])
   }
 
   async function loadFromCache(): Promise<CachedConfig | null> {
-    try {
-      const cached = await storage.getItem(CACHE_KEY)
-      if (!cached) return null
+    await removeCacheKeys([...LEGACY_CACHE_KEYS, scope.legacyCacheKey])
 
-      const parsed = JSON.parse(cached) as CachedConfig
-      return parsed
-    } catch {
+    let storedBinding: string | null
+    try {
+      storedBinding = await cacheStorage.getItem(scope.bindingKey)
+    } catch (error) {
+      emitDiagnostic({ code: "cache_read_failed", message: "Could not read cache binding", error })
       return null
     }
-  }
+    if (!storedBinding) return null
 
-  async function saveToCache(flags: Flags, version: number, etag: string): Promise<void> {
+    let parsedBinding: unknown
     try {
-      const cache: CachedConfig = {
-        flags,
-        version,
-        etag,
-        fetchedAt: Date.now(),
-      }
-      await storage.setItem(CACHE_KEY, JSON.stringify(cache))
-    } catch {
-      // Ignore cache save errors
+      parsedBinding = JSON.parse(storedBinding)
+    } catch (error) {
+      emitDiagnostic({ code: "cache_invalid", message: "Cache binding was malformed", error })
+      await clearBindingAndCache()
+      return null
+    }
+    if (!isPersistedCacheBinding(parsedBinding, scope)) {
+      emitDiagnostic({ code: "cache_invalid", message: "Cache binding failed validation" })
+      await clearBindingAndCache()
+      return null
+    }
+    activeBinding = parsedBinding
+
+    const cacheKey = createCacheKey(scope, parsedBinding)
+    let cached: string | null
+    try {
+      cached = await cacheStorage.getItem(cacheKey)
+    } catch (error) {
+      emitDiagnostic({ code: "cache_read_failed", message: "Could not read cached config", error })
+      await clearActiveCache()
+      return null
+    }
+    if (!cached) return null
+
+    let parsedCache: unknown
+    try {
+      parsedCache = JSON.parse(cached)
+    } catch (error) {
+      emitDiagnostic({ code: "cache_invalid", message: "Cached config was malformed", error })
+      await clearActiveCache()
+      return null
+    }
+    if (!isCachedConfig(parsedCache, scope, parsedBinding)) {
+      emitDiagnostic({ code: "cache_invalid", message: "Cached config failed core validation" })
+      await clearActiveCache()
+      return null
+    }
+
+    if (
+      !("config" in parsedCache) ||
+      !validateCachedConfig(parsedCache.config) ||
+      parsedCache.config.source.app !== parsedBinding.appId ||
+      parsedCache.config.source.environment !== parsedBinding.environment ||
+      parsedCache.config.configVersion !== parsedCache.version
+    ) {
+      emitDiagnostic({ code: "cache_invalid", message: "Cached config failed core validation" })
+      await clearActiveCache()
+      return null
+    }
+
+    if (Math.max(0, now() - parsedCache.fetchedAt) > maxStaleMs) {
+      emitDiagnostic({ code: "cache_invalid", message: "Cached config exceeded max stale age" })
+      await clearActiveCache()
+      return null
+    }
+
+    activeCache = parsedCache
+    return parsedCache
+  }
+
+  async function establishBinding(appId: string, environment: string): Promise<PersistedCacheBinding> {
+    const binding = createPersistedCacheBinding(scope, { appId, environment })
+    activeBinding = binding
+    try {
+      await cacheStorage.setItem(scope.bindingKey, JSON.stringify(binding))
+    } catch (error) {
+      emitDiagnostic({ code: "cache_write_failed", message: "Could not persist cache binding", error })
+    }
+    return binding
+  }
+
+  async function saveToCache(
+    binding: PersistedCacheBinding,
+    flagConfig: FlagConfig,
+    etag: string,
+    fetchedAt: number,
+  ): Promise<void> {
+    const cache: CachedConfig = {
+      schemaVersion: CACHE_SCHEMA_VERSION,
+      endpointFingerprint: scope.endpointFingerprint,
+      clientKeyFingerprint: scope.clientKeyFingerprint,
+      appId: binding.appId,
+      environment: binding.environment,
+      flags: flagConfig.flags,
+      version: flagConfig.configVersion,
+      config: flagConfig,
+      etag,
+      fetchedAt,
+    }
+
+    activeCache = cache
+    try {
+      await cacheStorage.setItem(createCacheKey(scope, binding), JSON.stringify(cache))
+    } catch (error) {
+      emitDiagnostic({ code: "cache_write_failed", message: "Could not persist config cache", error })
     }
   }
 
-  async function fetchConfig(): Promise<void> {
-    if (destroyed) return
-
-    // Cancel any in-flight request (only if AbortController exists)
-    if (hasAbortController && fetchController) {
-      fetchController.abort()
+  function getActiveCache(): CachedConfig | null {
+    const cache = activeCache
+    if (
+      activeBinding &&
+      cache &&
+      cache.appId === activeBinding.appId &&
+      cache.environment === activeBinding.environment &&
+      state.appId === cache.appId &&
+      state.environment === cache.environment &&
+      state.configVersion === cache.config.configVersion &&
+      state.etag === cache.etag
+    ) {
+      return cache
     }
+    return null
+  }
+
+  function applyConfig(
+    flagConfig: FlagConfig,
+    source: "cache" | "network",
+    etag: string,
+    fetchedAt: number,
+  ): void {
+    setState({
+      config: flagConfig,
+      flags: flagConfig.flags,
+      status: "ready",
+      source,
+      error: null,
+      fetchedAt,
+      configVersion: flagConfig.configVersion,
+      appId: flagConfig.source.app,
+      environment: flagConfig.source.environment,
+      version: flagConfig.configVersion,
+      etag,
+    })
+    scheduleConfigTimers(fetchedAt)
+  }
+
+  function wait(delayMs: number): Promise<void> {
+    if (destroyed || delayMs <= 0) return Promise.resolve()
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        delayTimers.delete(timer)
+        resolve()
+      }, Math.min(MAX_TIMEOUT_MS, delayMs))
+      delayTimers.set(timer, resolve)
+    })
+  }
+
+  function retryDelay(attempt: number): number {
+    return Math.min(retry.maxDelayMs, retry.baseDelayMs * 2 ** attempt)
+  }
+
+  async function requestConfig(reason: RefreshReason): Promise<void> {
+    if (destroyed) return
+    if (typeof fetch !== "function") {
+      setState({ status: state.config ? "ready" : "error", error: "fetch is unavailable" })
+      emitDiagnostic({ code: "fetch_failed", message: "Global fetch is unavailable", reason })
+      return
+    }
+
+    if (state.config) setState({ status: "refreshing" })
+    else setState({ status: "loading", source: "none" })
 
     fetchController = hasAbortController ? new AbortController() : null
-
-    // Only show loading if we don't have flags yet
-    if (Object.keys(state.flags).length === 0) {
-      setState({ status: "loading" })
-    }
+    let lastError: unknown = null
 
     try {
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${clientKey}`,
-      }
+      for (let attempt = 0; attempt <= retry.maxRetries; attempt += 1) {
+        if (destroyed) return
+        try {
+          const headers: Record<string, string> = { Authorization: `Bearer ${clientKey}` }
+          const requestCache = getActiveCache()
+          if (requestCache) headers["If-None-Match"] = requestCache.etag
 
-      if (state.etag) {
-        headers["If-None-Match"] = state.etag
-      }
+          const response = await fetch(scope.configUrl, {
+            headers,
+            ...(fetchController ? { signal: fetchController.signal } : {}),
+          })
+          if (destroyed) return
 
-      const response = await fetch(`${BASE_URL}/api/v1/public-config`, {
-        headers,
-        signal: fetchController?.signal,
-      })
+          if (response.status === 304) {
+            const responseCache = getActiveCache()
+            if (!responseCache || !activeBinding) {
+              await clearActiveCache()
+              if (attempt < retry.maxRetries) continue
+              throw new Error("Received 304 without an identity-bound cache entry")
+            }
+            const fetchedAt = now()
+            applyConfig(responseCache.config, "network", responseCache.etag, fetchedAt)
+            await saveToCache(activeBinding, responseCache.config, responseCache.etag, fetchedAt)
+            return
+          }
 
-      if (destroyed) return
+          if (response.status === 401) {
+            let body: { error?: string } = {}
+            try {
+              body = (await response.json()) as { error?: string }
+            } catch {
+              // A malformed error body must not escape.
+            }
+            await clearBindingAndCache()
+            clearRefreshTimers()
+            setState({
+              ...initialState,
+              refresh: state.refresh,
+              evaluationContext: state.evaluationContext,
+              ...(state.userId ? { userId: state.userId } : {}),
+              status: "error",
+              error: body.error || "Invalid or unauthorized client key",
+            })
+            return
+          }
 
-      // Handle 304 Not Modified
-      if (response.status === 304) {
-        setState({
-          status: "ready",
-          lastFetchedAt: Date.now(),
-          error: null,
-        })
-        // Update cache fetchedAt
-        if (state.version !== null && state.etag) {
-          await saveToCache(state.flags, state.version, state.etag)
+          if (response.status === 429) {
+            setState({ status: "rate-limited", error: "Monthly quota exceeded" })
+            if (state.fetchedAt !== null) scheduleConfigTimers(state.fetchedAt, true)
+            return
+          }
+
+          if (!response.ok) {
+            if (response.status >= 500) throw new RetryableResponseError(response.status)
+            setState({ status: state.config ? "ready" : "error", error: `Server error: ${response.status}` })
+            if (state.fetchedAt !== null) scheduleConfigTimers(state.fetchedAt, true)
+            return
+          }
+
+          const data: unknown = await response.json()
+          if (!isConfigResponse(data)) {
+            emitDiagnostic({ code: "config_invalid", message: "Public config response was malformed" })
+            throw new Error("Invalid config response")
+          }
+
+          let flagConfig: FlagConfig
+          try {
+            flagConfig = normalizeConfigResponse(data as ConfigResponse)
+          } catch (error) {
+            emitDiagnostic({ code: "config_invalid", message: "Core rejected the config response", error })
+            throw error
+          }
+
+          if (
+            activeBinding &&
+            (activeBinding.appId !== flagConfig.source.app ||
+              activeBinding.environment !== flagConfig.source.environment)
+          ) {
+            await clearBindingAndCache()
+            clearRefreshTimers()
+            setState({
+              ...initialState,
+              refresh: state.refresh,
+              evaluationContext: state.evaluationContext,
+              ...(state.userId ? { userId: state.userId } : {}),
+              status: "error",
+              error: "Authenticated config identity changed for bound client key",
+            })
+            return
+          }
+
+          const binding =
+            activeBinding ??
+            (await establishBinding(flagConfig.source.app, flagConfig.source.environment))
+          const etag = response.headers.get("ETag") || `"${flagConfig.configVersion}"`
+          const fetchedAt = now()
+          applyConfig(flagConfig, "network", etag, fetchedAt)
+          await saveToCache(binding, flagConfig, etag, fetchedAt)
+          return
+        } catch (error) {
+          if (destroyed) return
+          if (error instanceof Error && error.name === "AbortError") return
+          lastError = error
+          if (attempt >= retry.maxRetries) break
+          const delayMs = retryDelay(attempt)
+          emitDiagnostic({
+            code: "retry_scheduled",
+            message: `Refresh retry scheduled in ${delayMs}ms`,
+            error,
+            reason,
+            attempt: attempt + 1,
+          })
+          await wait(delayMs)
         }
-        return
       }
 
-      // Handle 401 Unauthorized
-      if (response.status === 401) {
-        const body = await response.json().catch(() => ({})) as { error?: string }
-        setState({
-          status: "error",
-          error: body.error || "Invalid or unauthorized client key",
-        })
-        return
-      }
-
-      // Handle 429 Rate Limited
-      if (response.status === 429) {
-        setState({
-          status: "rate-limited",
-          error: "Monthly quota exceeded",
-        })
-        return
-      }
-
-      // Handle other errors
-      if (!response.ok) {
-        setState({
-          status: "error",
-          error: `Server error: ${response.status}`,
-        })
-        return
-      }
-
-      // Parse successful response
-      const data = (await response.json()) as ConfigResponse
-      const etag = response.headers.get("ETag") || `"${data.version}"`
-
-      setState({
-        flags: data.doc.flags,
-        status: "ready",
-        version: data.version,
-        etag: etag,
-        lastFetchedAt: Date.now(),
-        error: null,
-      })
-
-      await saveToCache(data.doc.flags, data.version, etag)
-    } catch (err) {
-      if (destroyed) return
-
-      // Ignore abort errors
-      if (err instanceof Error && err.name === "AbortError") {
-        return
-      }
-
-      // Network or other error - keep existing flags if we have them
-      setState({
-        status: state.flags && Object.keys(state.flags).length > 0 ? "ready" : "error",
-        error: err instanceof Error ? err.message : "Network error",
-      })
+      const message = errorMessage(lastError)
+      setState({ status: state.config ? "ready" : "error", error: message })
+      emitDiagnostic({ code: "fetch_failed", message, error: lastError, reason })
+      if (state.fetchedAt !== null) scheduleConfigTimers(state.fetchedAt, true)
     } finally {
       fetchController = null
     }
   }
 
-  async function initialize(): Promise<void> {
-    if (destroyed) return
+  function refresh(reason: RefreshReason = "manual"): Promise<void> {
+    if (destroyed) return Promise.resolve()
+    if (inFlight) return inFlight
+    emitDiagnostic({ code: "refresh_triggered", message: `Refresh triggered by ${reason}`, reason })
+    inFlight = requestConfig(reason)
+      .catch((error: unknown) => {
+        if (!destroyed) {
+          const message = errorMessage(error)
+          setState({ status: state.config ? "ready" : "error", error: message })
+          emitDiagnostic({ code: "fetch_failed", message, error, reason })
+        }
+      })
+      .finally(() => {
+        inFlight = null
+      })
+    return inFlight
+  }
 
-    try {
-      // Load from cache first
-      const cached = await loadFromCache()
-
-      if (cached) {
-        // Show cached data immediately
-        setState({
-          flags: cached.flags,
-          status: "ready",
-          version: cached.version,
-          etag: cached.etag,
-          lastFetchedAt: cached.fetchedAt,
+  function setupLifecycle(): void {
+    const appState: AppStateAdapter | null =
+      config.appState === undefined ? guardedAppState() : config.appState
+    if (config.appState === undefined && !appState) {
+      emitDiagnostic({
+        code: "native_integration_unavailable",
+        message: "React Native AppState is unavailable; foreground refresh is disabled",
+      })
+    }
+    if (appState) {
+      currentAppState = appState.currentState
+      try {
+        appStateSubscription = appState.addEventListener("change", (nextState) => {
+          const wasBackground = currentAppState === "background" || currentAppState === "inactive"
+          currentAppState = nextState
+          if (wasBackground && nextState === "active") void refresh("foreground")
+        })
+      } catch (error) {
+        emitDiagnostic({
+          code: "native_integration_unavailable",
+          message: "Could not subscribe to React Native AppState",
+          error,
         })
       }
+    }
 
-      // Always fetch on app start - ETag ensures we only download if changed
-      await fetchConfig()
-    } catch {
-      // Initialization failed but don't crash the app
-      setState({
-        status: "error",
-        error: "Failed to initialize",
-      })
+    const network: NetworkAdapter | null | undefined = config.network
+    if (network) {
+      try {
+        networkSubscription = network.subscribe((nextConnected) => {
+          const reconnected = connected === false && nextConnected
+          connected = nextConnected
+          if (reconnected) void refresh("reconnect")
+        })
+      } catch (error) {
+        emitDiagnostic({
+          code: "native_integration_unavailable",
+          message: "Could not subscribe to the network adapter",
+          error,
+        })
+      }
     }
   }
 
-  function destroy(): void {
-    destroyed = true
-    if (hasAbortController && fetchController) {
-      fetchController.abort()
-      fetchController = null
+  async function initialize(): Promise<void> {
+    if (destroyed || initialized) return
+    initialized = true
+    setupLifecycle()
+    try {
+      const cached = await loadFromCache()
+      if (destroyed) return
+      if (cached) {
+        applyConfig(cached.config, "cache", cached.etag, cached.fetchedAt)
+        if (Math.max(0, now() - cached.fetchedAt) >= ttlMs) await refresh("initialize")
+        return
+      }
+      await refresh("initialize")
+    } catch (error) {
+      if (!destroyed) {
+        const message = errorMessage(error, "Failed to initialize")
+        setState({ status: state.config ? "ready" : "error", error: message })
+        emitDiagnostic({ code: "fetch_failed", message, error, reason: "initialize" })
+      }
     }
+  }
+
+  function setContext(evaluationContext: EvaluationContext, userId?: string): void {
+    setState({
+      evaluationContext,
+      userId,
+    })
+  }
+
+  function destroy(): void {
+    if (destroyed) return
+    destroyed = true
+    clearRefreshTimers()
+    removeSubscription(appStateSubscription)
+    removeSubscription(networkSubscription)
+    appStateSubscription = null
+    networkSubscription = null
+    if (hasAbortController) fetchController?.abort()
+    fetchController = null
+    for (const [timer, resolve] of delayTimers) {
+      clearTimeout(timer)
+      resolve()
+    }
+    delayTimers.clear()
+    inFlight = null
   }
 
   return {
     initialize,
     destroy,
-    refetch: fetchConfig,
+    refresh,
+    refetch: () => refresh("manual"),
+    setContext,
+    getState: () => withDerivedState(state),
   }
 }
