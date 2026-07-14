@@ -53,8 +53,8 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && tsc -p tsconfig.types.json && cp scripts/cjs-package.json dist/cjs/package.json",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src",
-    "test:watch": "bun test --watch src",
+    "test": "bun test ./src/__tests__",
+    "test:watch": "bun test --watch ./src/__tests__",
     "check:cache-drift": "node scripts/check-cache-drift.mjs",
     "smoke:package": "node scripts/smoke-package.mjs",
     "smoke:hermes": "node scripts/smoke-hermes.mjs",

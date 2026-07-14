@@ -5,7 +5,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const coreRoot = process.env.SUPERFLAG_CORE_DIR ?? join(dirname(root), "superflag-core")
+const coreRoot = process.env.SUPERFLAG_CORE_DIR ?? join(root, "node_modules", "@superflag-sh", "core")
 const temp = mkdtempSync(join(tmpdir(), "superflag-expo-hermes-"))
 const tarball = join(temp, "package.tgz")
 const coreTarball = join(temp, "core.tgz")
