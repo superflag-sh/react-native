@@ -37,6 +37,7 @@ export function SuperflagProvider({
   retry,
   appState,
   network,
+  telemetry,
   onReady,
   onDiagnostic,
   onEvaluation,
@@ -69,7 +70,8 @@ export function SuperflagProvider({
     })
   }, [emitDiagnostic])
 
-  const emitEvaluation = useCallback((event: EvaluationEvent): void => {
+  const emitEvaluation = useCallback((event: EvaluationEvent, exposed: boolean): void => {
+    clientRef.current?.recordEvaluation(event, exposed)
     invokeSafely(callbackRef.current.onEvaluation, event, (error) =>
       callbackFailure("onEvaluation", error),
     )
@@ -110,6 +112,7 @@ export function SuperflagProvider({
       retry,
       appState,
       network,
+      telemetry,
       onStateChange: setState,
       onReady: (readyState) =>
         invokeSafely(callbackRef.current.onReady, readyState, (error) =>
@@ -124,7 +127,7 @@ export function SuperflagProvider({
       clientRef.current = null
       client.destroy()
     }
-  }, [propKey, configUrl, ttlSeconds, maxStaleAgeSeconds, storage, retry, appState, network])
+  }, [propKey, configUrl, ttlSeconds, maxStaleAgeSeconds, storage, retry, appState, network, telemetry])
 
   useEffect(() => {
     clientRef.current?.setContext(evaluationContext, userId)
@@ -141,6 +144,27 @@ export function SuperflagProvider({
       emitDiagnostic,
       emitEvaluation,
       emitExposure,
+      track: (...args: Parameters<SuperflagClient["track"]>) =>
+        clientRef.current?.track(...args) ?? Promise.resolve({ status: "disabled", queueSize: 0 }),
+      flush: () => clientRef.current?.flush() ?? Promise.resolve({
+        sent: 0,
+        accepted: 0,
+        duplicates: 0,
+        permanent: 0,
+        retryScheduled: 0,
+        queueSize: 0,
+      }),
+      shutdown: (options?: Parameters<SuperflagClient["shutdown"]>[0]) =>
+        clientRef.current?.shutdown(options) ?? Promise.resolve({
+          sent: 0,
+          accepted: 0,
+          duplicates: 0,
+          permanent: 0,
+          retryScheduled: 0,
+          queueSize: 0,
+          timedOut: false,
+          dropped: 0,
+        }),
     }),
     [state, emitDiagnostic, emitEvaluation, emitExposure],
   )

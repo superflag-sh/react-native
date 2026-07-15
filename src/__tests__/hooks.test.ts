@@ -46,6 +46,9 @@ describe("React public API parity", () => {
 			emitEvaluation: () => {},
 			emitExposure: () => {},
 			emitDiagnostic: () => {},
+			track: async () => ({ status: "disabled", queueSize: 0 }),
+			flush: async () => ({ sent: 0, accepted: 0, duplicates: 0, permanent: 0, retryScheduled: 0, queueSize: 0 }),
+			shutdown: async () => ({ sent: 0, accepted: 0, duplicates: 0, permanent: 0, retryScheduled: 0, queueSize: 0, timedOut: false, dropped: 0 }),
 		});
 
 		expect(result.fetchedAt).toBe(90_000);
@@ -97,6 +100,9 @@ describe("React public API parity", () => {
 			emitEvaluation: (event) => evaluations.push(event),
 			emitExposure: (event) => exposures.push(event),
 			emitDiagnostic: () => {},
+			track: async () => ({ status: "queued", queueSize: 1 }),
+			flush: async () => ({ sent: 1, accepted: 1, duplicates: 0, permanent: 0, retryScheduled: 0, queueSize: 0 }),
+			shutdown: async () => ({ sent: 0, accepted: 0, duplicates: 0, permanent: 0, retryScheduled: 0, queueSize: 0, timedOut: false, dropped: 0 }),
 		};
 		const client = createContextClient<{ checkout: boolean }>(context);
 
@@ -107,5 +113,7 @@ describe("React public API parity", () => {
 
 		await client.refresh();
 		expect(refreshes).toBe(1);
+		expect(await client.track("checkout", "purchase", 1)).toEqual({ status: "queued", queueSize: 1 });
+		expect((await client.flush()).accepted).toBe(1);
 	});
 });

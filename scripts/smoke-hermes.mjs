@@ -5,10 +5,8 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const coreRoot = process.env.SUPERFLAG_CORE_DIR ?? join(root, "node_modules", "@superflag-sh", "core")
 const temp = mkdtempSync(join(tmpdir(), "superflag-expo-hermes-"))
 const tarball = join(temp, "package.tgz")
-const coreTarball = join(temp, "core.tgz")
 const bundle = join(temp, "index.bundle.js")
 const bytecode = join(temp, "index.bundle.hbc")
 
@@ -29,7 +27,6 @@ function pack(sourceRoot, destination) {
 
 try {
   pack(root, tarball)
-  pack(coreRoot, coreTarball)
   writeFileSync(
     join(temp, "package.json"),
     JSON.stringify({
@@ -39,7 +36,6 @@ try {
       type: "module",
       dependencies: {
         "@react-native-async-storage/async-storage": "2.2.0",
-        "@superflag-sh/core": "file:./core.tgz",
         "@superflag-sh/react-native": "file:./package.tgz",
         expo: "55.0.18",
         react: "19.2.0",
@@ -54,8 +50,8 @@ try {
   )
   writeFileSync(
     join(temp, "index.js"),
-    'import { SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } from "@superflag-sh/react-native";\n' +
-      "const exportsUnderTest = [SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag];\n" +
+    'import { SuperflagProvider, createHostedTelemetryTransport, createSuperflagClient, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } from "@superflag-sh/react-native";\n' +
+      "const exportsUnderTest = [SuperflagProvider, createHostedTelemetryTransport, createSuperflagClient, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag];\n" +
       'if (!exportsUnderTest.every((value) => typeof value === "function")) throw new Error("SDK startup exports missing");\n' +
       'globalThis.__SUPERFLAG_HERMES_SMOKE__ = "ok";\n',
   )

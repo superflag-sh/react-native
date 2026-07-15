@@ -32,6 +32,7 @@ import { isConfigResponse, normalizeConfigResponse } from "./config.js"
 import { validateCachedConfig } from "./config.js"
 import { initialState } from "./context.js"
 import { storage as defaultStorage } from "./storage.js"
+import { createReactNativeTelemetry } from "./telemetry.js"
 
 const DEFAULT_CONFIG_URL = "https://superflag.sh/api/v1/public-config"
 const DEFAULT_MAX_STALE_AGE_SECONDS = 24 * 60 * 60
@@ -122,6 +123,17 @@ export function createClient(config: ClientConfig): SuperflagClient {
       // Diagnostic handlers are the last error boundary.
     }
   }
+
+  const telemetry = createReactNativeTelemetry({
+    clientKey,
+    configUrl: scope.configUrl,
+    storage: cacheStorage,
+    options: config.telemetry,
+    now,
+    getContext: () => state.evaluationContext,
+    getConfig: () => state.config,
+    emitDiagnostic,
+  })
 
   function invokeCallback(
     name: "onReady",
@@ -565,7 +577,11 @@ export function createClient(config: ClientConfig): SuperflagClient {
         appStateSubscription = appState.addEventListener("change", (nextState) => {
           const wasBackground = currentAppState === "background" || currentAppState === "inactive"
           currentAppState = nextState
-          if (wasBackground && nextState === "active") void refresh("foreground")
+          if (nextState === "background" || nextState === "inactive") void telemetry.flush()
+          if (wasBackground && nextState === "active") {
+            void telemetry.flush()
+            void refresh("foreground")
+          }
         })
       } catch (error) {
         emitDiagnostic({
@@ -582,7 +598,10 @@ export function createClient(config: ClientConfig): SuperflagClient {
         networkSubscription = network.subscribe((nextConnected) => {
           const reconnected = connected === false && nextConnected
           connected = nextConnected
-          if (reconnected) void refresh("reconnect")
+          if (reconnected) {
+            void telemetry.flush()
+            void refresh("reconnect")
+          }
         })
       } catch (error) {
         emitDiagnostic({
@@ -599,6 +618,7 @@ export function createClient(config: ClientConfig): SuperflagClient {
     initialized = true
     setupLifecycle()
     try {
+      await telemetry.initialize()
       const cached = await loadFromCache()
       if (destroyed) return
       if (cached) {
@@ -639,6 +659,7 @@ export function createClient(config: ClientConfig): SuperflagClient {
     }
     delayTimers.clear()
     inFlight = null
+    void telemetry.shutdown()
   }
 
   return {
@@ -647,6 +668,11 @@ export function createClient(config: ClientConfig): SuperflagClient {
     refresh,
     refetch: () => refresh("manual"),
     setContext,
+    recordEvaluation: (event, exposed) => telemetry.recordEvaluation(event, exposed),
+    track: (flagKey, metricKey, value, options) =>
+      telemetry.track(flagKey, metricKey, value, options),
+    flush: () => telemetry.flush(),
+    shutdown: (options) => telemetry.shutdown(options),
     getState: () => withDerivedState(state),
   }
 }

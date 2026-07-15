@@ -5,7 +5,7 @@
     "": {
       "name": "@superflag-sh/react-native",
       "dependencies": {
-        "@superflag-sh/core": "^0.1.0",
+        "@superflag-sh/core": "0.2.1",
       },
       "devDependencies": {
         "@react-native-async-storage/async-storage": "^2.1.2",
@@ -148,7 +148,7 @@
 
     "@sinonjs/fake-timers": ["@sinonjs/fake-timers@10.3.0", "", { "dependencies": { "@sinonjs/commons": "^3.0.0" } }, "sha512-V4BG07kuYSUkTCSBHG8G8TNhM+F19jXFWnQtzj+we8DrkpSBCee9Z3Ms8yiGer/dlmhe35/Xdgyo3/0rQKg7YA=="],
 
-    "@superflag-sh/core": ["@superflag-sh/core@0.1.0", "", { "peerDependencies": { "@openfeature/server-sdk": ">=1" }, "optionalPeers": ["@openfeature/server-sdk"] }, "sha512-6z/2FMQRhZ8Z7xsMbHwE6dCPSobfd4qf+PvuuS3ODCVcEy0Hg3NoYKAueFSyksLROWsL8PqFymKChlo4YocZPw=="],
+    "@superflag-sh/core": ["@superflag-sh/core@0.2.1", "", { "peerDependencies": { "@openfeature/server-sdk": ">=1" }, "optionalPeers": ["@openfeature/server-sdk"] }, "sha512-AB4BEg0jYC0eaISEP0PZKPw4WSNfb/PaYpGh+KQZPtIjv4QHTeR2r52Bsx3Whdj5wrmc55Ni4OhsoD6oHrkUpw=="],
 
     "@types/babel__core": ["@types/babel__core@7.20.5", "", { "dependencies": { "@babel/parser": "^7.20.7", "@babel/types": "^7.20.7", "@types/babel__generator": "*", "@types/babel__template": "*", "@types/babel__traverse": "*" } }, "sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA=="],
 

@@ -133,7 +133,46 @@ function Checkout() {
 ```
 
 `useSuperflagClient()` is the unbound imperative equivalent. It provides `getFlag`,
-`getFlagDetails`, and `refresh` from the current provider context for event handlers and callbacks.
+`getFlagDetails`, `track`, `flush`, `shutdown`, and `refresh` from the current provider context for event handlers and callbacks.
+
+## Feature telemetry
+
+Telemetry is opt-in and never participates in evaluation. Use hosted delivery or inject a transport:
+
+```tsx
+<SuperflagProvider
+  clientKey="pub_prod_xxx"
+  targetingKey="user-123"
+  telemetry={{
+    hosted: true,
+    allowedAttributes: ["surface"],
+    maxQueueSize: 1_000,
+  }}
+>
+  {children}
+</SuperflagProvider>
+```
+
+Value hooks and imperative `getFlag` calls create deduplicated canonical exposures. Details hooks create decision events, while provider initialization and `useFlags()` create neither. Existing `onEvaluation` and `onExposure` callbacks remain available independently of hosted telemetry.
+
+The mobile queue is bounded and persisted through the configured storage seam. It retries after offline delivery failures, flushes on background, foreground, and reconnect transitions, and retains only validated canonical envelopes. Raw targeting keys, targeting attributes, and client keys never enter the queue. The default subject pseudonym is installation-scoped; provide `telemetry.pseudonymize` when an application needs a consented account-level identity across devices.
+
+Record a numeric outcome against the current subject's latest real exposure:
+
+```tsx
+const client = useSuperflagClient<{ checkout: boolean }>()
+
+await client.track("checkout", "purchase", 42, {
+  revision: 2,
+  attributes: { surface: "cart" },
+})
+
+await client.flush()
+```
+
+Outcome attributes are default-closed and must appear in `allowedAttributes`. `track` returns a structured result for disabled telemetry, missing identity/exposure, validation failure, queueing, or backpressure. `shutdown({ timeoutMs })` performs a bounded best-effort drain.
+
+For non-React integrations and cold-start tests, `createSuperflagClient` exposes the same pure-JavaScript client and lifecycle adapters. `createHostedTelemetryTransport` exposes the first-party batch envelope for custom composition without importing a native module.
 
 ### `useFlags()`
 
@@ -188,7 +227,7 @@ Cache entries remain schema-versioned and identity-bound. Raw client keys are ne
 
 ## Package targets
 
-The package ships ES2019 native ESM (`react-native` and `import`), CommonJS (`require`), and one declaration tree. Release checks pack the SDK and sibling core into clean consumers, validate ESM/CommonJS/NodeNext imports, bundle through Expo Metro, and compile the production bundle to Hermes bytecode.
+The package ships ES2019 native ESM (`react-native` and `import`), CommonJS (`require`), and one declaration tree. Release checks pack the SDK into clean consumers, resolve its exact core dependency from npm, validate ESM/CommonJS/NodeNext imports and telemetry behavior, bundle through Expo Metro, and compile the production bundle to Hermes bytecode.
 
 ## License
 

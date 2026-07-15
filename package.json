@@ -1,6 +1,6 @@
 {
   "name": "@superflag-sh/react-native",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "React Native SDK for Superflag feature flags",
   "type": "module",
   "main": "./dist/cjs/index.js",
@@ -36,7 +36,7 @@
   "author": "Superflag",
   "license": "MIT",
   "dependencies": {
-    "@superflag-sh/core": "^0.1.0"
+    "@superflag-sh/core": "0.2.1"
   },
   "peerDependencies": {
     "react": ">=18",

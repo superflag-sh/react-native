@@ -5,10 +5,8 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const coreRoot = process.env.SUPERFLAG_CORE_DIR ?? join(root, "node_modules", "@superflag-sh", "core")
 const temp = mkdtempSync(join(tmpdir(), "superflag-react-native-smoke-"))
 const tarball = join(temp, "package.tgz")
-const coreTarball = join(temp, "core.tgz")
 
 function run(command, args, cwd = root) {
   return execFileSync(command, args, {
@@ -33,7 +31,6 @@ function smokeConsumer(reactVersion, reactTypesVersion) {
       private: true,
       type: "module",
       dependencies: {
-        "@superflag-sh/core": `file:${coreTarball}`,
         "@superflag-sh/react-native": `file:${tarball}`,
         react: reactVersion,
         "@types/react": reactTypesVersion,
@@ -45,23 +42,24 @@ function smokeConsumer(reactVersion, reactTypesVersion) {
 
   writeFileSync(
     join(consumer, "smoke-esm.mjs"),
-    'import { SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } from "@superflag-sh/react-native";\n' +
-      'if (![SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag].every((value) => typeof value === "function")) throw new Error("ESM exports missing");\n',
+    'import { SuperflagProvider, createHostedTelemetryTransport, createSuperflagClient, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } from "@superflag-sh/react-native";\n' +
+      'if (![SuperflagProvider, createHostedTelemetryTransport, createSuperflagClient, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag].every((value) => typeof value === "function")) throw new Error("ESM exports missing");\n',
   )
   writeFileSync(
     join(consumer, "smoke-cjs.cjs"),
-    'const { SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } = require("@superflag-sh/react-native");\n' +
-      'if (![SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag].every((value) => typeof value === "function")) throw new Error("CJS exports missing");\n',
+    'const { SuperflagProvider, createHostedTelemetryTransport, createSuperflagClient, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } = require("@superflag-sh/react-native");\n' +
+      'if (![SuperflagProvider, createHostedTelemetryTransport, createSuperflagClient, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag].every((value) => typeof value === "function")) throw new Error("CJS exports missing");\n',
   )
   writeFileSync(
     join(consumer, "consumer.tsx"),
-    'import { SuperflagProvider, createTypedHooks, useFlag, useFlagDetails, type DiagnosticEvent, type StorageAdapter } from "@superflag-sh/react-native";\n' +
+    'import { SuperflagProvider, createTypedHooks, useFlag, useFlagDetails, type DiagnosticEvent, type FeatureEvent, type StorageAdapter } from "@superflag-sh/react-native";\n' +
       'declare const storage: StorageAdapter;\n' +
       'type Flags = { enabled: boolean };\n' +
       'const flags = createTypedHooks<Flags>();\n' +
       'const Child = () => <>{String(useFlag("enabled", false))}{String(useFlagDetails("enabled", false)?.reason)}{String(flags.useFlag("enabled", false))}</>;\n' +
       'const diagnostic = (_event: DiagnosticEvent) => {};\n' +
-      'export const App = () => <SuperflagProvider clientKey="pub_prod_smoke" storage={storage} targetingKey="person" attributes={{ plan: "pro" }} onDiagnostic={diagnostic}><Child /></SuperflagProvider>;\n',
+      'const featureEvent = (_event: FeatureEvent) => {};\n' +
+      'export const App = () => <SuperflagProvider clientKey="pub_prod_smoke" storage={storage} targetingKey="person" attributes={{ plan: "pro" }} onDiagnostic={diagnostic} telemetry={{ hosted: { baseUrl: "https://superflag.sh" }, onEvent: featureEvent }}><Child /></SuperflagProvider>;\n',
   )
   writeFileSync(
     join(consumer, "tsconfig.json"),
@@ -80,8 +78,126 @@ function smokeConsumer(reactVersion, reactTypesVersion) {
     }),
   )
 
+  writeFileSync(
+    join(consumer, "telemetry-behavior.mjs"),
+    `import { createSuperflagClient } from "@superflag-sh/react-native";
+const values = new Map();
+const storage = {
+  async getItem(key) { return values.get(key) ?? null; },
+  async setItem(key, value) { values.set(key, value); },
+  async removeItem(key) { values.delete(key); },
+};
+const listeners = new Set();
+const appState = {
+  currentState: "active",
+  addEventListener(_event, listener) {
+    listeners.add(listener);
+    return { remove() { listeners.delete(listener); } };
+  },
+  emit(state) { for (const listener of listeners) listener(state); },
+};
+const flagConfig = {
+  schemaVersion: 1,
+  source: { app: "smoke-app", environment: "production" },
+  configVersion: 1,
+  flags: {
+    checkout: {
+      type: "boolean", description: "Checkout", tags: [], owner: "smoke",
+      lifecycle: "active", enabled: true,
+      variations: { off: { value: false }, on: { value: true } },
+      offVariation: "off", fallthrough: { variation: "on" }, visibility: "client",
+    },
+  },
+};
+globalThis.fetch = async () => Response.json(
+  { appId: "smoke-app", env: "production", version: 1, doc: flagConfig, ttlSeconds: 60 },
+  { headers: { ETag: '"1"' } },
+);
+let online = false;
+let attempts = 0;
+let clock = Date.parse("2026-07-14T12:00:00.000Z");
+const delivered = [];
+const acceptedIds = new Set();
+const transport = {
+  async send(events) {
+    attempts += 1;
+    if (!online) throw new Error("offline");
+    return { items: events.map((event) => {
+      if (acceptedIds.has(event.id)) return { eventId: event.id, status: "duplicate" };
+      acceptedIds.add(event.id);
+      delivered.push(event);
+      return { eventId: event.id, status: "accepted" };
+    }) };
+  },
+};
+function makeClient() {
+  return createSuperflagClient({
+    clientKey: "pub_prod_smoke",
+    configUrl: "https://superflag.sh/api/v1/public-config",
+    ttlSeconds: 60,
+    storage,
+    evaluationContext: {
+      targetingKey: "raw-cold-user",
+      attributes: { email: "cold@example.com" },
+    },
+    appState,
+    retry: { maxRetries: 0, baseDelayMs: 0, maxDelayMs: 0 },
+    now: () => clock,
+    telemetry: {
+      transport,
+      retryBaseMs: 10_000,
+      retryMaxMs: 10_000,
+      flushIntervalMs: 60_000,
+    },
+    onStateChange() {},
+  });
+}
+const first = makeClient();
+await first.initialize();
+if (delivered.length !== 0) throw new Error("Initialization created a false exposure");
+first.recordEvaluation({
+  key: "checkout",
+  context: { targetingKey: "raw-cold-user", attributes: { email: "cold@example.com" } },
+  details: {
+    value: true,
+    variation: "on",
+    reason: "FALLTHROUGH",
+    flagKey: "checkout",
+    source: flagConfig.source,
+    configVersion: 1,
+    timestamp: "2026-07-14T12:00:00.000Z",
+  },
+}, true);
+await new Promise((resolve) => setTimeout(resolve, 0));
+appState.emit("background");
+await new Promise((resolve) => setTimeout(resolve, 5));
+if (attempts < 1) throw new Error("Background lifecycle did not flush telemetry");
+const persisted = JSON.stringify([...values]);
+if (persisted.includes("raw-cold-user") || persisted.includes("cold@example.com")) {
+  throw new Error("Persistent telemetry leaked raw targeting context");
+}
+const offlineQueue = [...values.values()].map((value) => { try { return JSON.parse(value); } catch { return null; } }).find((value) => value?.schemaVersion === 1 && Array.isArray(value.entries));
+if (offlineQueue?.entries.length !== 1) throw new Error("Expected one persisted offline event: " + JSON.stringify(offlineQueue));
+await first.shutdown({ flush: false });
+first.destroy();
+online = true;
+clock += 20_000;
+const second = makeClient();
+await second.initialize();
+const beforeExplicitFlush = delivered.length;
+const explicitFlush = await second.flush();
+if (delivered.length !== 1 || delivered[0].kind !== "exposure") {
+  throw new Error("Persistent offline exposure did not drain after restart: " + JSON.stringify({ delivered, attempts, beforeExplicitFlush, explicitFlush, values: [...values] }));
+}
+await second.shutdown();
+second.destroy();
+console.log("packed telemetry: private persistence, offline restart drain, and AppState flush ok");
+`,
+  )
+
   run("node", ["smoke-esm.mjs"], consumer)
   run("node", ["smoke-cjs.cjs"], consumer)
+  run("node", ["telemetry-behavior.mjs"], consumer)
   run(join(consumer, "node_modules", ".bin", "tsc"), ["-p", "tsconfig.json"], consumer)
 
   const react = JSON.parse(readFileSync(join(consumer, "node_modules", "react", "package.json"), "utf8"))
@@ -94,7 +210,6 @@ function smokeConsumer(reactVersion, reactTypesVersion) {
 
 try {
   pack(root, tarball)
-  pack(coreRoot, coreTarball)
   const entries = run("tar", ["-tzf", tarball]).trim().split("\n")
   const forbidden = entries.filter((entry) => /\/(src|scripts|smoke|__tests__)\//.test(entry))
   if (forbidden.length > 0) throw new Error(`Source-only files leaked into tarball: ${forbidden.join(", ")}`)
@@ -106,7 +221,7 @@ try {
   smokeConsumer("19.2.0", "19.2.14")
 
   const manifest = JSON.parse(readFileSync(join(temp, "react-19", "node_modules", "@superflag-sh", "react-native", "package.json"), "utf8"))
-  if (manifest.dependencies?.["@superflag-sh/core"] !== "^0.1.0") throw new Error("Published manifest must use the semver core dependency ^0.1.0")
+  if (manifest.dependencies?.["@superflag-sh/core"] !== "0.2.1") throw new Error("Published manifest must use exact @superflag-sh/core 0.2.1")
   if (/^(?:file|link):/.test(manifest.dependencies["@superflag-sh/core"])) throw new Error("Published manifest leaked a local core dependency")
   console.log(`tarball: ${entries.length} files, source-only entries: 0`)
   console.log(`runtime imports: ESM and CommonJS ok (${manifest.name}@${manifest.version})`)

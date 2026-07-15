@@ -201,13 +201,13 @@ try {
   )
   writeFileSync(
     join(fixture, "smoke-esm.mjs"),
-    'import { SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } from "@superflag-sh/react-native";\n' +
-      'if (![SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag].every((value) => typeof value === "function")) throw new Error("ESM exports missing");\n',
+    'import { SuperflagProvider, createHostedTelemetryTransport, createSuperflagClient, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } from "@superflag-sh/react-native";\n' +
+      'if (![SuperflagProvider, createHostedTelemetryTransport, createSuperflagClient, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag].every((value) => typeof value === "function")) throw new Error("ESM exports missing");\n',
   )
   writeFileSync(
     join(fixture, "smoke-cjs.cjs"),
-    'const { SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } = require("@superflag-sh/react-native");\n' +
-      'if (![SuperflagProvider, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag].every((value) => typeof value === "function")) throw new Error("CommonJS exports missing");\n',
+    'const { SuperflagProvider, createHostedTelemetryTransport, createSuperflagClient, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag } = require("@superflag-sh/react-native");\n' +
+      'if (![SuperflagProvider, createHostedTelemetryTransport, createSuperflagClient, createTypedHooks, useBooleanFlag, useBooleanFlagDetails, useEvaluationDetails, useFlag, useFlagDetails, useFlags, useNumberFlag, useNumberFlagDetails, useObjectFlag, useObjectFlagDetails, useStringFlag, useStringFlagDetails, useSuperflagClient, useTypedFlag].every((value) => typeof value === "function")) throw new Error("CommonJS exports missing");\n',
   )
 
   run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], fixture)
@@ -224,6 +224,7 @@ try {
   const installedManifest = JSON.parse(readFileSync(join(fixture, "node_modules", "@superflag-sh", "react-native", "package.json"), "utf8"))
   const coreManifest = JSON.parse(readFileSync(join(fixture, "node_modules", "@superflag-sh", "core", "package.json"), "utf8"))
   assert(installedManifest.version === version, `Installed ${packageName}@${installedManifest.version}; expected ${version}`)
+  assert(installedManifest.dependencies?.[coreName] === "0.2.1", `SDK must pin exact ${coreName}@0.2.1, received ${installedManifest.dependencies?.[coreName]}`)
   assert(typeof coreManifest.version === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(coreManifest.version), `Core did not resolve to an exact registry version: ${coreManifest.version}`)
   assert(!/^(?:file|link|workspace):/.test(installedManifest.dependencies?.[coreName] ?? ""), "Published SDK manifest contains a local core dependency")
   const coreLock = lock.packages?.["node_modules/@superflag-sh/core"]

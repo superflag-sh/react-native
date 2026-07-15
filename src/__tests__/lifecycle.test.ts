@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import type { FlagConfig } from "@superflag-sh/core"
+import type { FeatureEvent } from "@superflag-sh/core/events"
 import { createCacheKey, createCacheScope, createPersistedCacheBinding } from "../cache.js"
 import { createClient } from "../client.js"
+import { evaluateWithCore } from "../evaluation.js"
 import type {
   AppStateAdapter,
   AppStateSubscription,
@@ -10,6 +12,7 @@ import type {
   NetworkAdapter,
   StorageAdapter,
   SuperflagState,
+  SuperflagTelemetryOptions,
 } from "../types.js"
 
 const originalFetch = globalThis.fetch
@@ -137,6 +140,7 @@ function setup(options: {
   onDiagnostic?: (event: DiagnosticEvent) => void | Promise<void>
   maxStaleAgeSeconds?: number
   retries?: number
+  telemetry?: SuperflagTelemetryOptions
 } = {}) {
   const storage = options.storage ?? new MemoryStorage()
   const states: SuperflagState[] = []
@@ -150,6 +154,7 @@ function setup(options: {
     retry: { maxRetries: options.retries ?? 0, baseDelayMs: 0, maxDelayMs: 0 },
     appState: options.appState ?? null,
     network: options.network,
+    telemetry: options.telemetry,
     now: options.now ?? (() => 100_000),
     onReady: options.onReady,
     onDiagnostic: options.onDiagnostic,
@@ -274,6 +279,47 @@ describe("cache and refresh lifecycle", () => {
     network.emit(true)
     await flush()
     expect(fetches).toBe(3)
+    client.destroy()
+  })
+
+  test("flushes telemetry on background/foreground without creating initialization exposures", async () => {
+    const appState = new FakeAppState()
+    const events: FeatureEvent[] = []
+    globalThis.fetch = async () => response()
+    const { client } = setup({
+      appState,
+      telemetry: {
+        transport: {
+          async send(batch) {
+            events.push(...batch)
+            return {
+              items: batch.map((event) => ({ eventId: event.id, status: "accepted" as const })),
+            }
+          },
+        },
+        flushIntervalMs: 60_000,
+      },
+    })
+    await client.initialize()
+    expect(events).toEqual([])
+
+    const evaluationContext = { targetingKey: "person", attributes: { plan: "pro" } }
+    client.recordEvaluation({
+      key: "checkout",
+      context: evaluationContext,
+      details: evaluateWithCore(flagConfig(), evaluationContext, "checkout", false, {
+        now: "2026-07-14T12:00:00.000Z",
+      }),
+    }, true)
+    await flush()
+    expect(events).toEqual([])
+
+    appState.emit("background")
+    await flush()
+    expect(events).toHaveLength(1)
+    appState.emit("active")
+    await flush()
+    expect(events).toHaveLength(1)
     client.destroy()
   })
 

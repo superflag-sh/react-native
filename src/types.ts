@@ -7,6 +7,15 @@ import type {
   FlagValue,
   FlagValueFor,
   JsonValue,
+  FeatureEvent,
+  FeatureEventDimension,
+  PseudonymousSubject,
+  TelemetryBackpressurePolicy,
+  TelemetryDiagnostic,
+  TelemetryEnqueueResult,
+  TelemetryFlushResult,
+  TelemetryShutdownResult,
+  TelemetryTransport,
 } from "@superflag-sh/core"
 
 export type {
@@ -18,7 +27,24 @@ export type {
   FlagValue,
   FlagValueFor,
   JsonValue,
+  FeatureEvent,
+  FeatureEventDimension,
+  PseudonymousSubject,
+  TelemetryBackpressurePolicy,
+  TelemetryDiagnostic,
+  TelemetryEnqueueResult,
+  TelemetryFlushResult,
+  TelemetryShutdownResult,
+  TelemetryTransport,
 }
+
+export type SuperflagTrackResult =
+  | TelemetryEnqueueResult
+  | {
+      status: "dropped"
+      reason: "invalid_outcome" | "missing_exposure" | "missing_identity"
+      queueSize: number
+    }
 
 /** Legacy value-only flag shape accepted from older public-config responses. */
 export interface LegacyFlagValue {
@@ -106,6 +132,13 @@ export type DiagnosticCode =
   | "refresh_triggered"
   | "callback_failed"
   | "native_integration_unavailable"
+  | "telemetry_callback_failed"
+  | "telemetry_event_dropped"
+  | "telemetry_invalid"
+  | "telemetry_retry_scheduled"
+  | "telemetry_storage_failed"
+  | "telemetry_subject_failed"
+  | "telemetry_transport_failed"
 
 export interface DiagnosticEvent {
   code: DiagnosticCode
@@ -126,6 +159,81 @@ export interface ExposureEvent<T extends FlagValue = FlagValue> extends Evaluati
   timestamp: number
 }
 
+export interface SuperflagTelemetryIdentityInput {
+  targetingKey: string
+  namespace: string
+  appId: string
+  environment: string
+  state: PseudonymousSubject["state"]
+}
+
+export interface SuperflagTelemetryQueueOptions {
+  maxQueueSize?: number
+  batchSize?: number
+  flushIntervalMs?: number
+  backpressure?: TelemetryBackpressurePolicy
+  maxAttempts?: number
+  retryBaseMs?: number
+  retryMaxMs?: number
+  retryJitterRatio?: number
+  maxExposureDedupeEntries?: number
+  maxEventPayloadBytes?: number
+  shutdownTimeoutMs?: number
+}
+
+export interface SuperflagTelemetryOptions extends SuperflagTelemetryQueueOptions {
+  /** Opt in to Superflag-hosted ingestion. Ignored when transport is supplied. */
+  hosted?: boolean | SuperflagHostedTelemetryOptions
+  /** Custom delivery transport. Providing one opts telemetry in. */
+  transport?: TelemetryTransport
+  /** Override the config cache storage for the telemetry queue. */
+  storage?: StorageAdapter
+  /** Optional application-provided pseudonymizer. Raw context is never persisted or sent. */
+  pseudonymize?: (
+    input: SuperflagTelemetryIdentityInput,
+  ) => PseudonymousSubject | Promise<PseudonymousSubject>
+  subjectState?: PseudonymousSubject["state"]
+  subjectRevision?: number
+  /** Canonical event callback. Existing onEvaluation/onExposure callbacks remain supported. */
+  onEvent?: (event: FeatureEvent) => void
+  onDiagnostic?: (diagnostic: TelemetryDiagnostic) => void
+  /** Outcome attributes must be named here before they may enter an event. */
+  allowedAttributes?: readonly string[]
+}
+
+export interface SuperflagHostedTelemetryOptions {
+  /** Control-plane base URL. `/api/v1/events/batch` is appended safely. */
+  baseUrl?: string
+  headers?: Readonly<Record<string, string>>
+  fetch?: HostedTelemetryFetch
+}
+
+export interface HostedTelemetryResponse {
+  ok: boolean
+  status: number
+  headers: { get(name: string): string | null }
+  json(): Promise<unknown>
+}
+
+export type HostedTelemetryFetch = (
+  input: string,
+  init: {
+    method: "POST"
+    headers: Readonly<Record<string, string>>
+    body: string
+    signal: unknown
+  },
+) => Promise<HostedTelemetryResponse>
+
+export interface SuperflagTrackOptions {
+  /** Metric definition revision. @default 1 */
+  revision?: number
+  attributes?: Readonly<Record<string, FeatureEventDimension>>
+}
+
+/** @deprecated Use SuperflagTrackOptions. */
+export type TrackOptions = SuperflagTrackOptions
+
 export interface SuperflagProviderProps {
   clientKey?: string
   configUrl?: string
@@ -144,6 +252,7 @@ export interface SuperflagProviderProps {
   appState?: AppStateAdapter | null
   /** Optional connectivity source, for example a guarded NetInfo adapter. */
   network?: NetworkAdapter | null
+  telemetry?: SuperflagTelemetryOptions
   onReady?: (state: SuperflagState) => void | Promise<void>
   onDiagnostic?: (event: DiagnosticEvent) => void | Promise<void>
   onEvaluation?: (event: EvaluationEvent) => void | Promise<void>
@@ -192,6 +301,7 @@ export interface ClientConfig {
   retry?: Partial<RetryOptions>
   appState?: AppStateAdapter | null
   network?: NetworkAdapter | null
+  telemetry?: SuperflagTelemetryOptions
   onReady?: SuperflagProviderProps["onReady"]
   onDiagnostic?: SuperflagProviderProps["onDiagnostic"]
   /** Test-only clock injection; production callers should omit it. */
@@ -211,6 +321,18 @@ export interface SuperflagClient {
   /** @deprecated Use refresh. */
   refetch(): Promise<void>
   setContext(context: EvaluationContext, userId?: string): void
+  recordEvaluation(event: EvaluationEvent, exposed: boolean): void
+  track(
+    flagKey: string,
+    metricKey: string,
+    value: number,
+    options?: SuperflagTrackOptions,
+  ): Promise<SuperflagTrackResult>
+  flush(): Promise<TelemetryFlushResult>
+  shutdown(options?: {
+    flush?: boolean
+    timeoutMs?: number
+  }): Promise<TelemetryShutdownResult>
   getState(): SuperflagState
 }
 
@@ -232,6 +354,17 @@ export interface TypedSuperflagClient<T extends object> {
     name: K,
     fallback: TypedFlagValues<T>[K],
   ): TypedEvaluationDetails<TypedFlagValues<T>[K]> | undefined
+  track<K extends Extract<keyof TypedFlagValues<T>, string>>(
+    flagKey: K,
+    metricKey: string,
+    value: number,
+    options?: SuperflagTrackOptions,
+  ): Promise<SuperflagTrackResult>
+  flush(): Promise<TelemetryFlushResult>
+  shutdown(options?: {
+    flush?: boolean
+    timeoutMs?: number
+  }): Promise<TelemetryShutdownResult>
   refresh(): Promise<void>
 }
 

@@ -39,7 +39,7 @@ function useDetails<T extends FlagValue>(
   useEffect(() => {
     if (!details) return
     const event = { key, context: context.evaluationContext, details }
-    context.emitEvaluation(event)
+    context.emitEvaluation(event, exposed)
     if (exposed) context.emitExposure({ ...event, timestamp: Date.now() })
   }, [context.emitEvaluation, context.emitExposure, context.evaluationContext, details, exposed, key])
 
@@ -162,7 +162,7 @@ export function createContextClient<T extends object>(
       fallback as FlagValue,
     )
     const event = { key: name, context: context.evaluationContext, details }
-    context.emitEvaluation(event)
+    context.emitEvaluation(event, exposed)
     if (exposed) context.emitExposure({ ...event, timestamp: Date.now() })
     return details as TypedEvaluationDetails<TypedFlagValues<T>[K]>
   }
@@ -175,6 +175,9 @@ export function createContextClient<T extends object>(
     getFlagDetails(name, fallback) {
       return evaluate(name, fallback, false)
     },
+    track: context.track,
+    flush: context.flush,
+    shutdown: context.shutdown,
     refresh: context.refresh,
   }
 }
