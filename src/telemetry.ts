@@ -1,7 +1,7 @@
 import {
   createEvaluationEvent,
-  createNumericOutcomeEvent,
   exposureDedupeKey,
+  FEATURE_EVENT_SCHEMA_VERSION,
   parseFeatureEvent,
 } from "@superflag-sh/core"
 import type {
@@ -646,10 +646,22 @@ export class ReactNativeTelemetry {
   async track(
     flagKey: string,
     metricKey: string,
-    value: number,
+    value?: number,
     options: TrackOptions = {},
   ): Promise<SuperflagTrackResult> {
     if (!this.options) return { status: "disabled", queueSize: 0 }
+    if (!flagKey.trim() || !metricKey.trim()) {
+      return { status: "dropped", reason: "invalid_outcome", queueSize: this.entries.length }
+    }
+    if (value !== undefined && !Number.isFinite(value)) {
+      return { status: "dropped", reason: "invalid_outcome", queueSize: this.entries.length }
+    }
+    if (
+      options.revision !== undefined &&
+      (!Number.isSafeInteger(options.revision) || options.revision < 1)
+    ) {
+      return { status: "dropped", reason: "invalid_outcome", queueSize: this.entries.length }
+    }
     const config = this.runtime.getConfig()
     if (!config) return { status: "dropped", reason: "invalid_outcome", queueSize: this.entries.length }
     const context = this.runtime.getContext()
@@ -662,24 +674,34 @@ export class ReactNativeTelemetry {
       if (!exposure) {
         return { status: "dropped", reason: "missing_exposure", queueSize: this.entries.length }
       }
-      const event = createNumericOutcomeEvent({
-        id: this.eventId("out"),
-        source: config.source,
-        flagKey,
-        variation: exposure?.variation ?? "unknown",
-        configVersion: exposure?.configVersion ?? config.configVersion,
-        reason: exposure?.reason ?? "DEFAULT",
-        timestamp: new Date(this.runtime.now()).toISOString(),
-        sdk: SDK,
-        subject,
-        exposureId: exposure.id,
-        metric: { key: metricKey, revision: options.revision ?? 1 },
-        value,
-        ...(options.attributes ? { attributes: options.attributes } : {}),
-        ...(this.options.allowedAttributes
-          ? { allowedAttributes: this.options.allowedAttributes }
-          : {}),
-      })
+      const allow = new Set(this.options.allowedAttributes ?? [])
+      const attributes = options.attributes
+        ? Object.fromEntries(
+            Object.entries(options.attributes).filter(([key]) => allow.has(key)),
+          )
+        : undefined
+      const event = parseFeatureEvent(
+        {
+          schemaVersion: FEATURE_EVENT_SCHEMA_VERSION,
+          id: this.eventId("out"),
+          kind: "outcome",
+          source: config.source,
+          flagKey,
+          variation: exposure.variation,
+          configVersion: exposure.configVersion,
+          reason: exposure.reason,
+          timestamp: new Date(this.runtime.now()).toISOString(),
+          sdk: SDK,
+          subject,
+          exposureId: exposure.id,
+          metric: { key: metricKey, revision: options.revision ?? 1 },
+          value: value ?? true,
+          ...(attributes && Object.keys(attributes).length > 0
+            ? { dimensions: attributes }
+            : {}),
+        },
+        { allowedDimensions: this.options.allowedAttributes ?? [] },
+      )
       return await this.enqueue(event)
     } catch (error) {
       this.diagnostic("telemetry_invalid", "Outcome event was rejected before enqueue", error)

@@ -325,7 +325,7 @@ export interface SuperflagClient {
   track(
     flagKey: string,
     metricKey: string,
-    value: number,
+    value?: number,
     options?: SuperflagTrackOptions,
   ): Promise<SuperflagTrackResult>
   flush(): Promise<TelemetryFlushResult>
@@ -357,7 +357,7 @@ export interface TypedSuperflagClient<T extends object> {
   track<K extends Extract<keyof TypedFlagValues<T>, string>>(
     flagKey: K,
     metricKey: string,
-    value: number,
+    value?: number,
     options?: SuperflagTrackOptions,
   ): Promise<SuperflagTrackResult>
   flush(): Promise<TelemetryFlushResult>

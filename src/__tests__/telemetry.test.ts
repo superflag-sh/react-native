@@ -69,6 +69,7 @@ function setup(options: {
   now?: () => number
   allowedAttributes?: readonly string[]
   onEvent?: (event: FeatureEvent) => void
+  getContext?: () => EvaluationContext
 } = {}) {
   const storage = options.storage ?? new MemoryStorage()
   const diagnostics: DiagnosticEvent[] = []
@@ -85,7 +86,7 @@ function setup(options: {
       flushIntervalMs: 60_000,
     },
     now: options.now ?? (() => Date.parse("2026-07-14T12:00:00.000Z")),
-    getContext: () => context,
+    getContext: options.getContext ?? (() => context),
     getConfig: () => config,
     emitDiagnostic: (event) => diagnostics.push({
       ...event,
@@ -276,7 +277,7 @@ describe("React Native telemetry", () => {
     expect(diagnostics.some((event) => event.code === "telemetry_event_dropped")).toBeTrue()
   })
 
-  test("tracks only feature-scoped numeric outcomes with allow-listed attributes", async () => {
+  test("tracks binary and numeric outcomes with consistently projected attributes", async () => {
     const delivered: FeatureEvent[] = []
     const { telemetry, diagnostics } = setup({
       allowedAttributes: ["surface"],
@@ -305,11 +306,86 @@ describe("React Native telemetry", () => {
       dimensions: { surface: "cart" },
     })
 
-    const rejected = await telemetry.track("checkout", "purchase", 5, {
+    const projected = await telemetry.track("checkout", "purchase", 5, {
       attributes: { email: "not-allowed" },
     })
-    expect(rejected).toMatchObject({ status: "dropped", reason: "invalid_outcome" })
-    expect(diagnostics.some((event) => event.code === "telemetry_invalid")).toBeTrue()
+    const binary = await telemetry.track("checkout", "converted")
+    expect(projected).toMatchObject({ status: "queued" })
+    expect(binary).toMatchObject({ status: "queued" })
+    await telemetry.flush()
+
+    const outcomes = delivered.filter((event) => event.kind === "outcome")
+    expect(outcomes).toHaveLength(3)
+    expect(outcomes[1]).not.toHaveProperty("dimensions")
+    expect(outcomes[2]).toMatchObject({
+      metric: { key: "converted", revision: 1 },
+      value: true,
+      exposureId: outcomes[0]?.exposureId,
+    })
+    expect(new Set(outcomes.map((event) => event.id)).size).toBe(3)
+    expect(diagnostics.some((event) => event.code === "telemetry_invalid")).toBeFalse()
+  })
+
+  test("rejects invalid identifiers and metric values before attribution", async () => {
+    const { telemetry } = setup({ onEvent: () => {} })
+    expect(await telemetry.track("", "purchase")).toMatchObject({
+      status: "dropped",
+      reason: "invalid_outcome",
+    })
+    expect(await telemetry.track("checkout", "", Number.NaN)).toMatchObject({
+      status: "dropped",
+      reason: "invalid_outcome",
+    })
+    expect(await telemetry.track("checkout", "purchase", 1, { revision: 0 })).toMatchObject({
+      status: "dropped",
+      reason: "invalid_outcome",
+    })
+  })
+
+  test("requires a new exposure after identity changes and forgets attribution on restart", async () => {
+    const events: FeatureEvent[] = []
+    let currentContext = context
+    const first = setup({
+      onEvent: (event) => events.push(event),
+      getContext: () => currentContext,
+    })
+    first.telemetry.recordExposure(exposure())
+    await settle()
+    expect(await first.telemetry.track("checkout", "purchase")).toMatchObject({
+      status: "callback_only",
+    })
+
+    currentContext = { ...context, targetingKey: "second-user" }
+    expect(await first.telemetry.track("checkout", "purchase")).toMatchObject({
+      status: "dropped",
+      reason: "missing_exposure",
+    })
+    first.telemetry.recordExposure({
+      ...exposure(),
+      context: currentContext,
+      details: { ...exposure().details, variation: "second-variation" },
+    })
+    await settle()
+    expect(await first.telemetry.track("checkout", "purchase")).toMatchObject({
+      status: "callback_only",
+    })
+
+    const exposures = events.filter((event) => event.kind === "exposure")
+    const outcomes = events.filter((event) => event.kind === "outcome")
+    expect(outcomes.at(-1)).toMatchObject({
+      exposureId: exposures.at(-1)?.id,
+      variation: "second-variation",
+    })
+
+    const restarted = setup({
+      storage: first.storage,
+      onEvent: () => {},
+      getContext: () => currentContext,
+    })
+    expect(await restarted.telemetry.track("checkout", "late-conversion")).toMatchObject({
+      status: "dropped",
+      reason: "missing_exposure",
+    })
   })
 
   test("does not create events during initialization or bulk state reads", async () => {

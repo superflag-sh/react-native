@@ -56,7 +56,7 @@ function smokeConsumer(reactVersion, reactTypesVersion) {
       'declare const storage: StorageAdapter;\n' +
       'type Flags = { enabled: boolean };\n' +
       'const flags = createTypedHooks<Flags>();\n' +
-      'const Child = () => <>{String(useFlag("enabled", false))}{String(useFlagDetails("enabled", false)?.reason)}{String(flags.useFlag("enabled", false))}</>;\n' +
+      'const Child = () => { const client = flags.useClient(); void client.track("enabled", "conversion"); void client.track("enabled", "revenue", 1); return <>{String(useFlag("enabled", false))}{String(useFlagDetails("enabled", false)?.reason)}{String(flags.useFlag("enabled", false))}</>; };\n' +
       'const diagnostic = (_event: DiagnosticEvent) => {};\n' +
       'const featureEvent = (_event: FeatureEvent) => {};\n' +
       'export const App = () => <SuperflagProvider clientKey="pub_prod_smoke" storage={storage} targetingKey="person" attributes={{ plan: "pro" }} onDiagnostic={diagnostic} telemetry={{ hosted: { baseUrl: "https://superflag.sh" }, onEvent: featureEvent }}><Child /></SuperflagProvider>;\n',
@@ -169,6 +169,8 @@ first.recordEvaluation({
   },
 }, true);
 await new Promise((resolve) => setTimeout(resolve, 0));
+const converted = await first.track("checkout", "converted");
+if (converted.status !== "queued") throw new Error("Binary outcome was not queued");
 appState.emit("background");
 await new Promise((resolve) => setTimeout(resolve, 5));
 if (attempts < 1) throw new Error("Background lifecycle did not flush telemetry");
@@ -177,7 +179,7 @@ if (persisted.includes("raw-cold-user") || persisted.includes("cold@example.com"
   throw new Error("Persistent telemetry leaked raw targeting context");
 }
 const offlineQueue = [...values.values()].map((value) => { try { return JSON.parse(value); } catch { return null; } }).find((value) => value?.schemaVersion === 1 && Array.isArray(value.entries));
-if (offlineQueue?.entries.length !== 1) throw new Error("Expected one persisted offline event: " + JSON.stringify(offlineQueue));
+if (offlineQueue?.entries.length !== 2) throw new Error("Expected exposure and binary outcome in persisted offline queue: " + JSON.stringify(offlineQueue));
 await first.shutdown({ flush: false });
 first.destroy();
 online = true;
@@ -186,12 +188,12 @@ const second = makeClient();
 await second.initialize();
 const beforeExplicitFlush = delivered.length;
 const explicitFlush = await second.flush();
-if (delivered.length !== 1 || delivered[0].kind !== "exposure") {
-  throw new Error("Persistent offline exposure did not drain after restart: " + JSON.stringify({ delivered, attempts, beforeExplicitFlush, explicitFlush, values: [...values] }));
+if (delivered.length !== 2 || delivered[0].kind !== "exposure" || delivered[1].kind !== "outcome" || delivered[1].value !== true) {
+  throw new Error("Persistent exposure and binary outcome did not drain after restart: " + JSON.stringify({ delivered, attempts, beforeExplicitFlush, explicitFlush, values: [...values] }));
 }
 await second.shutdown();
 second.destroy();
-console.log("packed telemetry: private persistence, offline restart drain, and AppState flush ok");
+console.log("packed telemetry: private persistence, binary outcome restart drain, and AppState flush ok");
 `,
   )
 
