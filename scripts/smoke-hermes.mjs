@@ -1,12 +1,17 @@
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
+const coreRoot = process.env.SUPERFLAG_CORE_DIR
+  ? resolve(root, process.env.SUPERFLAG_CORE_DIR)
+  : join(root, "node_modules", "@superflag-sh", "core")
 const temp = mkdtempSync(join(tmpdir(), "superflag-expo-hermes-"))
 const tarball = join(temp, "package.tgz")
+const coreTarball = join(temp, "core.tgz")
+const stagedCore = join(temp, "core-package")
 const bundle = join(temp, "index.bundle.js")
 const bytecode = join(temp, "index.bundle.hbc")
 
@@ -27,6 +32,11 @@ function pack(sourceRoot, destination) {
 
 try {
   pack(root, tarball)
+  mkdirSync(stagedCore)
+  copyFileSync(join(coreRoot, "package.json"), join(stagedCore, "package.json"))
+  copyFileSync(join(coreRoot, "README.md"), join(stagedCore, "README.md"))
+  cpSync(join(coreRoot, "dist"), join(stagedCore, "dist"), { recursive: true })
+  pack(stagedCore, coreTarball)
   writeFileSync(
     join(temp, "package.json"),
     JSON.stringify({
@@ -36,6 +46,7 @@ try {
       type: "module",
       dependencies: {
         "@react-native-async-storage/async-storage": "2.2.0",
+        "@superflag-sh/core": "file:./core.tgz",
         "@superflag-sh/react-native": "file:./package.tgz",
         expo: "55.0.18",
         react: "19.2.0",

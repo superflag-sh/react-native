@@ -30,11 +30,33 @@ export function evaluateWithCore<T extends FlagValue = FlagValue>(
 	fallback: T,
 	options?: EvaluationOptions,
 ): EvaluationDetails<T> {
-	const evaluator = createEvaluator(config);
-	return evaluator.evaluate(
-		key,
-		context,
-		fallback,
-		options,
-	) as EvaluationDetails<T>;
+  return createEvaluationReader(config)(
+    context,
+    key,
+    fallback,
+    options,
+  );
+}
+
+export type EvaluationReader = <T extends FlagValue = FlagValue>(
+  context: EvaluationContext,
+  key: string,
+  fallback: T,
+  options?: EvaluationOptions,
+) => EvaluationDetails<T>
+
+/** Create one core evaluator per accepted config, then reuse it for every read. */
+export function createEvaluationReader(config: FlagConfig): EvaluationReader {
+  const evaluator = createEvaluator(config)
+  return <T extends FlagValue = FlagValue>(
+    context: EvaluationContext,
+    key: string,
+    fallback: T,
+    options?: EvaluationOptions,
+  ): EvaluationDetails<T> => evaluator.evaluate(
+    key,
+    context,
+    fallback,
+    options,
+  ) as EvaluationDetails<T>
 }

@@ -1,4 +1,4 @@
-import { createEvaluator, migrateLegacyFlags } from "@superflag-sh/core"
+import { migrateLegacyFlags, parseConfig } from "@superflag-sh/core"
 import type {
   ConfigResponse,
   FlagConfig,
@@ -63,16 +63,15 @@ export function normalizeConfigResponse(response: ConfigResponse): FlagConfig {
     throw new Error("Config document identity does not match its authenticated response")
   }
 
-  // Core parsing is the single validation/evaluation authority.
-  createEvaluator(config)
-  return config
+  // Core parsing is the single schema authority.
+  return parseConfig(config)
 }
 
-export function validateCachedConfig(config: FlagConfig): boolean {
+/** Parse an untrusted persisted document through the core schema Interface. */
+export function parseCachedConfig(config: unknown): FlagConfig | null {
   try {
-    createEvaluator(config)
-    return true
+    return parseConfig(config)
   } catch {
-    return false
+    return null
   }
 }

@@ -24,12 +24,12 @@ import {
   createCacheKey,
   createCacheScope,
   createPersistedCacheBinding,
-  isCachedConfig,
+  isIdentityBoundCacheEntry,
   isPersistedCacheBinding,
   type PersistedCacheBinding,
-} from "./cache.js"
+} from "@superflag-sh/core"
 import { isConfigResponse, normalizeConfigResponse } from "./config.js"
-import { validateCachedConfig } from "./config.js"
+import { parseCachedConfig } from "./config.js"
 import { initialState } from "./context.js"
 import { storage as defaultStorage } from "./storage.js"
 import { createReactNativeTelemetry } from "./telemetry.js"
@@ -106,6 +106,7 @@ export function createClient(config: ClientConfig): SuperflagClient {
   let fetchController: AbortController | null = null
   let activeBinding: PersistedCacheBinding | null = null
   let activeCache: CachedConfig | null = null
+  let configPublication = 0
   let ttlTimer: ReturnType<typeof setTimeout> | null = null
   let maxStaleTimer: ReturnType<typeof setTimeout> | null = null
   let appStateSubscription: AppStateSubscription | (() => void) | null = null
@@ -238,16 +239,24 @@ export function createClient(config: ClientConfig): SuperflagClient {
     await removeCacheKeys([scope.bindingKey])
   }
 
-  async function loadFromCache(): Promise<CachedConfig | null> {
+  function cacheLoadIsCurrent(expectedPublication: number): boolean {
+    return configPublication === expectedPublication && inFlight === null
+  }
+
+  async function loadFromCache(
+    expectedPublication: number,
+  ): Promise<CachedConfig | null> {
     await removeCacheKeys([...LEGACY_CACHE_KEYS, scope.legacyCacheKey])
 
     let storedBinding: string | null
     try {
       storedBinding = await cacheStorage.getItem(scope.bindingKey)
     } catch (error) {
+      if (!cacheLoadIsCurrent(expectedPublication)) return null
       emitDiagnostic({ code: "cache_read_failed", message: "Could not read cache binding", error })
       return null
     }
+    if (!cacheLoadIsCurrent(expectedPublication)) return null
     if (!storedBinding) return null
 
     let parsedBinding: unknown
@@ -255,61 +264,83 @@ export function createClient(config: ClientConfig): SuperflagClient {
       parsedBinding = JSON.parse(storedBinding)
     } catch (error) {
       emitDiagnostic({ code: "cache_invalid", message: "Cache binding was malformed", error })
-      await clearBindingAndCache()
+      if (cacheLoadIsCurrent(expectedPublication)) {
+        await removeCacheKeys([scope.bindingKey])
+      }
       return null
     }
     if (!isPersistedCacheBinding(parsedBinding, scope)) {
       emitDiagnostic({ code: "cache_invalid", message: "Cache binding failed validation" })
-      await clearBindingAndCache()
+      if (cacheLoadIsCurrent(expectedPublication)) {
+        await removeCacheKeys([scope.bindingKey])
+      }
       return null
     }
-    activeBinding = parsedBinding
-
     const cacheKey = createCacheKey(scope, parsedBinding)
     let cached: string | null
     try {
       cached = await cacheStorage.getItem(cacheKey)
     } catch (error) {
+      if (!cacheLoadIsCurrent(expectedPublication)) return null
       emitDiagnostic({ code: "cache_read_failed", message: "Could not read cached config", error })
-      await clearActiveCache()
       return null
     }
-    if (!cached) return null
+    if (!cacheLoadIsCurrent(expectedPublication)) return null
+    if (!cached) {
+      activeBinding = parsedBinding
+      return null
+    }
 
     let parsedCache: unknown
     try {
       parsedCache = JSON.parse(cached)
     } catch (error) {
       emitDiagnostic({ code: "cache_invalid", message: "Cached config was malformed", error })
-      await clearActiveCache()
+      if (cacheLoadIsCurrent(expectedPublication)) {
+        await removeCacheKeys([cacheKey])
+      }
       return null
     }
-    if (!isCachedConfig(parsedCache, scope, parsedBinding)) {
+    if (!isIdentityBoundCacheEntry(parsedCache, scope, parsedBinding)) {
       emitDiagnostic({ code: "cache_invalid", message: "Cached config failed core validation" })
-      await clearActiveCache()
+      if (cacheLoadIsCurrent(expectedPublication)) {
+        await removeCacheKeys([cacheKey])
+      }
       return null
     }
 
+    const cachedConfig =
+      "config" in parsedCache ? parseCachedConfig(parsedCache.config) : null
     if (
-      !("config" in parsedCache) ||
-      !validateCachedConfig(parsedCache.config) ||
-      parsedCache.config.source.app !== parsedBinding.appId ||
-      parsedCache.config.source.environment !== parsedBinding.environment ||
-      parsedCache.config.configVersion !== parsedCache.version
+      !cachedConfig ||
+      cachedConfig.source.app !== parsedBinding.appId ||
+      cachedConfig.source.environment !== parsedBinding.environment ||
+      cachedConfig.configVersion !== parsedCache.version
     ) {
       emitDiagnostic({ code: "cache_invalid", message: "Cached config failed core validation" })
-      await clearActiveCache()
+      if (cacheLoadIsCurrent(expectedPublication)) {
+        await removeCacheKeys([cacheKey])
+      }
       return null
     }
 
     if (Math.max(0, now() - parsedCache.fetchedAt) > maxStaleMs) {
       emitDiagnostic({ code: "cache_invalid", message: "Cached config exceeded max stale age" })
-      await clearActiveCache()
+      if (cacheLoadIsCurrent(expectedPublication)) {
+        await removeCacheKeys([cacheKey])
+      }
       return null
     }
 
-    activeCache = parsedCache
-    return parsedCache
+    if (!cacheLoadIsCurrent(expectedPublication)) return null
+
+    activeBinding = parsedBinding
+    activeCache = {
+      ...parsedCache,
+      flags: cachedConfig.flags,
+      config: cachedConfig,
+    }
+    return activeCache
   }
 
   async function establishBinding(appId: string, environment: string): Promise<PersistedCacheBinding> {
@@ -373,6 +404,7 @@ export function createClient(config: ClientConfig): SuperflagClient {
     etag: string,
     fetchedAt: number,
   ): void {
+    configPublication += 1
     setState({
       config: flagConfig,
       flags: flagConfig.flags,
@@ -510,6 +542,21 @@ export function createClient(config: ClientConfig): SuperflagClient {
             return
           }
 
+          const latestVersion = Math.max(
+            activeCache?.version ?? -1,
+            state.configVersion ?? -1,
+          )
+          if (flagConfig.configVersion < latestVersion) {
+            const message = `Rejected config version ${flagConfig.configVersion}; latest accepted version is ${latestVersion}`
+            emitDiagnostic({ code: "config_invalid", message })
+            setState({
+              status: state.config ? "ready" : "error",
+              error: message,
+            })
+            if (state.fetchedAt !== null) scheduleConfigTimers(state.fetchedAt, true)
+            return
+          }
+
           const binding =
             activeBinding ??
             (await establishBinding(flagConfig.source.app, flagConfig.source.environment))
@@ -618,14 +665,16 @@ export function createClient(config: ClientConfig): SuperflagClient {
     initialized = true
     setupLifecycle()
     try {
+      const publicationBeforeCacheLoad = configPublication
       await telemetry.initialize()
-      const cached = await loadFromCache()
+      const cached = await loadFromCache(publicationBeforeCacheLoad)
       if (destroyed) return
       if (cached) {
         applyConfig(cached.config, "cache", cached.etag, cached.fetchedAt)
         if (Math.max(0, now() - cached.fetchedAt) >= ttlMs) await refresh("initialize")
         return
       }
+      if (configPublication !== publicationBeforeCacheLoad) return
       await refresh("initialize")
     } catch (error) {
       if (!destroyed) {

@@ -1,7 +1,6 @@
 import { useContext, useEffect, useMemo } from "react"
 import { SuperflagContext } from "./context.js"
 import type { SuperflagContextValue } from "./context.js"
-import { evaluateWithCore } from "./evaluation.js"
 import type {
   EvaluationDetails,
   EvaluationOptions,
@@ -10,12 +9,11 @@ import type {
   FlagValue,
   FlagValueFor,
   ObjectFlagValue,
-  SuperflagSource,
-  SuperflagStatus,
   TypedEvaluationDetails,
   TypedFlagValues,
   TypedSuperflagClient,
   TypedSuperflagHooks,
+  UseFlagsResult,
 } from "./types.js"
 
 function useSuperflagContext() {
@@ -32,9 +30,9 @@ function useDetails<T extends FlagValue>(
 ): EvaluationDetails<T> | undefined {
   const context = useSuperflagContext()
   const details = useMemo(() => {
-    if (!context.config) return undefined
-    return evaluateWithCore(context.config, context.evaluationContext, key, fallback, options)
-  }, [context.config, context.evaluationContext, key, fallback, options])
+    if (!context.evaluationReader) return undefined
+    return context.evaluationReader(context.evaluationContext, key, fallback, options)
+  }, [context.evaluationReader, context.evaluationContext, key, fallback, options])
 
   useEffect(() => {
     if (!details) return
@@ -149,14 +147,14 @@ export function useObjectFlagDetails<T extends ObjectFlagValue>(
 export function createContextClient<T extends object>(
   context: SuperflagContextValue,
 ): TypedSuperflagClient<T> {
+  const reader = context.evaluationReader
   function evaluate<K extends Extract<keyof TypedFlagValues<T>, string>>(
     name: K,
     fallback: TypedFlagValues<T>[K],
     exposed: boolean,
   ): TypedEvaluationDetails<TypedFlagValues<T>[K]> | undefined {
-    if (!context.config) return undefined
-    const details = evaluateWithCore(
-      context.config,
+    if (!reader) return undefined
+    const details = reader(
       context.evaluationContext,
       name,
       fallback as FlagValue,
@@ -182,10 +180,40 @@ export function createContextClient<T extends object>(
   }
 }
 
+/** Relevant identities for the imperative client's memoized Interface. */
+export type ContextClientDependencies = readonly [
+  SuperflagContextValue["evaluationReader"],
+  SuperflagContextValue["evaluationContext"],
+  SuperflagContextValue["emitEvaluation"],
+  SuperflagContextValue["emitExposure"],
+  SuperflagContextValue["track"],
+  SuperflagContextValue["flush"],
+  SuperflagContextValue["shutdown"],
+  SuperflagContextValue["refresh"],
+]
+
+export function contextClientDependencies(
+  context: SuperflagContextValue,
+): ContextClientDependencies {
+  return [
+    context.evaluationReader,
+    context.evaluationContext,
+    context.emitEvaluation,
+    context.emitExposure,
+    context.track,
+    context.flush,
+    context.shutdown,
+    context.refresh,
+  ] as const
+}
+
 /** Imperative evaluation API for callbacks that cannot call hooks themselves. */
 export function useSuperflagClient<T extends object = Record<string, FlagValue>>(): TypedSuperflagClient<T> {
   const context = useSuperflagContext()
-  return useMemo(() => createContextClient<T>(context), [context])
+  return useMemo(
+    () => createContextClient<T>(context),
+    contextClientDependencies(context),
+  )
 }
 
 /** Bind a generated value map or literal core FlagConfig once for key/value-safe access. */
@@ -203,19 +231,6 @@ export function createTypedHooks<const T extends object>(): TypedSuperflagHooks<
       return useSuperflagClient<T>()
     },
   }
-}
-
-export interface UseFlagsResult {
-  ready: boolean
-  loading: boolean
-  status: SuperflagStatus
-  source: SuperflagSource
-  error: string | null
-  fetchedAt: number | null
-  configVersion: number | null
-  age: number | null
-  stale: boolean
-  refresh: () => Promise<void>
 }
 
 /** Project provider state into the public useFlags result. */

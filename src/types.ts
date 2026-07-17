@@ -97,6 +97,19 @@ export interface SuperflagState {
   userId?: string
 }
 
+export interface UseFlagsResult {
+  ready: boolean
+  loading: boolean
+  status: SuperflagStatus
+  source: SuperflagSource
+  error: string | null
+  fetchedAt: number | null
+  configVersion: number | null
+  age: number | null
+  stale: boolean
+  refresh: () => Promise<void>
+}
+
 export interface RetryOptions {
   /** Number of retries after the first request. @default 2 */
   maxRetries: number

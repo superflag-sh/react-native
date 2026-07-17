@@ -1,12 +1,17 @@
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
+const coreRoot = process.env.SUPERFLAG_CORE_DIR
+  ? resolve(root, process.env.SUPERFLAG_CORE_DIR)
+  : join(root, "node_modules", "@superflag-sh", "core")
 const temp = mkdtempSync(join(tmpdir(), "superflag-react-native-smoke-"))
 const tarball = join(temp, "package.tgz")
+const coreTarball = join(temp, "core.tgz")
+const stagedCore = join(temp, "core-package")
 
 function run(command, args, cwd = root) {
   return execFileSync(command, args, {
@@ -32,8 +37,10 @@ function smokeConsumer(reactVersion, reactTypesVersion) {
       type: "module",
       dependencies: {
         "@superflag-sh/react-native": `file:${tarball}`,
+        "@superflag-sh/core": `file:${coreTarball}`,
         react: reactVersion,
         "@types/react": reactTypesVersion,
+        "react-test-renderer": reactVersion,
         typescript: "5.9.3",
       },
     }),
@@ -197,9 +204,82 @@ console.log("packed telemetry: private persistence, binary outcome restart drain
 `,
   )
 
+  writeFileSync(
+    join(consumer, "provider-behavior.mjs"),
+    `import React from "react";
+import { act, create } from "react-test-renderer";
+import { SuperflagProvider, useFlags, useSuperflagClient } from "@superflag-sh/react-native";
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+const values = new Map();
+const storage = {
+  async getItem(key) { return values.get(key) ?? null; },
+  async setItem(key, value) { values.set(key, value); },
+  async removeItem(key) { values.delete(key); },
+};
+const config = {
+  schemaVersion: 1,
+  source: { app: "provider-smoke", environment: "production" },
+  configVersion: 1,
+  flags: {},
+};
+let rateLimited = false;
+let fetches = 0;
+globalThis.fetch = async () => {
+  fetches += 1;
+  if (rateLimited) return new Response(null, { status: 429 });
+  return Response.json(
+    { appId: "provider-smoke", env: "production", version: 1, doc: config, ttlSeconds: 60 },
+    { headers: { ETag: '"1"' } },
+  );
+};
+let currentClient;
+let status;
+function Feature() {
+  currentClient = useSuperflagClient();
+  status = useFlags().status;
+  return React.createElement("span", null, status);
+}
+function renderApp() {
+  return React.createElement(
+    SuperflagProvider,
+    {
+      clientKey: "pub_provider_smoke",
+      targetingKey: "person",
+      attributes: { nested: { tier: "pro", limits: [1, 2] } },
+      storage,
+      appState: null,
+      retry: { maxRetries: 0, baseDelayMs: 10, maxDelayMs: 20 },
+      telemetry: { onEvent() {}, allowedAttributes: ["tier", "plan"] },
+    },
+    React.createElement(Feature),
+  );
+}
+let root;
+await act(async () => {
+  root = create(renderApp());
+  for (let index = 0; index < 12; index += 1) await Promise.resolve();
+});
+if (status !== "ready" || fetches !== 1) throw new Error("provider did not initialize exactly once");
+const readyClient = currentClient;
+rateLimited = true;
+await act(async () => { await readyClient.refresh(); });
+if (status !== "rate-limited") throw new Error("rate-limit state transition was not observed");
+if (currentClient !== readyClient) throw new Error("imperative client identity changed on a state-only transition");
+await act(async () => {
+  root.update(renderApp());
+  for (let index = 0; index < 4; index += 1) await Promise.resolve();
+});
+if (fetches !== 2) throw new Error("inline retry/telemetry options recreated the underlying client");
+if (currentClient !== readyClient) throw new Error("imperative client identity changed on a semantic no-op render");
+await act(async () => root.unmount());
+console.log("packed provider: stable inline options and imperative client identity ok");
+`,
+  )
+
   run("node", ["smoke-esm.mjs"], consumer)
   run("node", ["smoke-cjs.cjs"], consumer)
   run("node", ["telemetry-behavior.mjs"], consumer)
+  run("node", ["provider-behavior.mjs"], consumer)
   run(join(consumer, "node_modules", ".bin", "tsc"), ["-p", "tsconfig.json"], consumer)
 
   const react = JSON.parse(readFileSync(join(consumer, "node_modules", "react", "package.json"), "utf8"))
@@ -212,6 +292,11 @@ console.log("packed telemetry: private persistence, binary outcome restart drain
 
 try {
   pack(root, tarball)
+  mkdirSync(stagedCore)
+  copyFileSync(join(coreRoot, "package.json"), join(stagedCore, "package.json"))
+  copyFileSync(join(coreRoot, "README.md"), join(stagedCore, "README.md"))
+  cpSync(join(coreRoot, "dist"), join(stagedCore, "dist"), { recursive: true })
+  pack(stagedCore, coreTarball)
   const entries = run("tar", ["-tzf", tarball]).trim().split("\n")
   const forbidden = entries.filter((entry) => /\/(src|scripts|smoke|__tests__)\//.test(entry))
   if (forbidden.length > 0) throw new Error(`Source-only files leaked into tarball: ${forbidden.join(", ")}`)
@@ -223,7 +308,7 @@ try {
   smokeConsumer("19.2.0", "19.2.14")
 
   const manifest = JSON.parse(readFileSync(join(temp, "react-19", "node_modules", "@superflag-sh", "react-native", "package.json"), "utf8"))
-  if (manifest.dependencies?.["@superflag-sh/core"] !== "0.2.1") throw new Error("Published manifest must use exact @superflag-sh/core 0.2.1")
+  if (manifest.dependencies?.["@superflag-sh/core"] !== "0.4.0") throw new Error("Published manifest must use exact @superflag-sh/core 0.4.0")
   if (/^(?:file|link):/.test(manifest.dependencies["@superflag-sh/core"])) throw new Error("Published manifest leaked a local core dependency")
   console.log(`tarball: ${entries.length} files, source-only entries: 0`)
   console.log(`runtime imports: ESM and CommonJS ok (${manifest.name}@${manifest.version})`)

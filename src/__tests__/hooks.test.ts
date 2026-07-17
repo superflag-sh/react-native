@@ -1,9 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import React from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { FlagConfig } from "@superflag-sh/core";
 import type { SuperflagContextValue } from "../context.js";
 import { initialState } from "../context.js";
+import { createEvaluationReader } from "../evaluation.js";
 import {
 	createContextClient,
+	contextClientDependencies,
 	createFlagsResult,
 	createTypedHooks,
 	useBooleanFlag,
@@ -15,6 +19,7 @@ import {
 	useStringFlag,
 	useStringFlagDetails,
 	useSuperflagClient,
+	useFlags,
 } from "../hooks.js";
 
 const config: FlagConfig = {
@@ -41,6 +46,7 @@ describe("React public API parity", () => {
 	test("reports useFlags age in seconds from provider state", () => {
 		const result = createFlagsResult({
 			...initialState,
+			evaluationReader: null,
 			fetchedAt: 90_000,
 			age: 10,
 			emitEvaluation: () => {},
@@ -53,6 +59,9 @@ describe("React public API parity", () => {
 
 		expect(result.fetchedAt).toBe(90_000);
 		expect(result.age).toBe(10);
+		expect("config" in result).toBeFalse();
+		expect("evaluationContext" in result).toBeFalse();
+		expect("emitEvaluation" in result).toBeFalse();
 	});
 
 	test("exports explicit typed value and details hooks", () => {
@@ -87,6 +96,7 @@ describe("React public API parity", () => {
 		const context: SuperflagContextValue = {
 			...initialState,
 			config,
+			evaluationReader: createEvaluationReader(config),
 			flags: config.flags,
 			status: "ready",
 			source: "network",
@@ -115,5 +125,79 @@ describe("React public API parity", () => {
 		expect(refreshes).toBe(1);
 		expect(await client.track("checkout", "purchase", 1)).toEqual({ status: "queued", queueSize: 1 });
 		expect((await client.flush()).accepted).toBe(1);
+	});
+
+	test("imperative client identity ignores unrelated provider state", () => {
+		const context: SuperflagContextValue = {
+			...initialState,
+			evaluationReader: null,
+			emitEvaluation: () => {},
+			emitExposure: () => {},
+			emitDiagnostic: () => {},
+			track: async () => ({ status: "disabled", queueSize: 0 }),
+			flush: async () => ({ sent: 0, accepted: 0, duplicates: 0, permanent: 0, retryScheduled: 0, queueSize: 0 }),
+			shutdown: async () => ({ sent: 0, accepted: 0, duplicates: 0, permanent: 0, retryScheduled: 0, queueSize: 0, timedOut: false, dropped: 0 }),
+		};
+		const refreshedState = { ...context, age: 11, status: "refreshing" as const };
+
+		expect(contextClientDependencies(refreshedState)).toEqual(
+			contextClientDependencies(context),
+		);
+	});
+
+	test("provider creates one evaluation reader for multiple hook and imperative consumers", async () => {
+		const originalFetch = globalThis.fetch;
+		const evaluation = await import("../evaluation.js");
+		const readerSpy = spyOn(evaluation, "createEvaluationReader");
+		const { SuperflagProvider } = await import("../provider.js");
+		const values = new Map<string, string>();
+		const storage = {
+			async getItem(key: string) { return values.get(key) ?? null; },
+			async setItem(key: string, value: string) { values.set(key, value); },
+			async removeItem(key: string) { values.delete(key); },
+		};
+		globalThis.fetch = async () => Response.json({
+			appId: "app-a",
+			env: "production",
+			version: 7,
+			doc: config,
+			ttlSeconds: 60,
+		}, { headers: { ETag: '"7"' } });
+
+		let status = "idle";
+		function Consumer() {
+			useBooleanFlagDetails("checkout", false);
+			useBooleanFlagDetails("checkout", false);
+			useSuperflagClient<{ checkout: boolean }>();
+			status = useFlags().status;
+			return null;
+		}
+		const renderApp = () => React.createElement(
+			SuperflagProvider,
+			{
+				clientKey: "pub_reader_owner",
+				storage,
+				appState: null,
+				retry: { maxRetries: 0, baseDelayMs: 0, maxDelayMs: 0 },
+			},
+			React.createElement(Consumer),
+		);
+
+		let root: ReactTestRenderer | undefined;
+		try {
+			await act(async () => {
+				root = create(renderApp());
+				for (let index = 0; index < 12; index += 1) await Promise.resolve();
+			});
+			expect(status).toBe("ready");
+			expect(readerSpy).toHaveBeenCalledTimes(1);
+
+			await act(async () => root?.update(renderApp()));
+			expect(readerSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			await act(async () => root?.unmount());
+			readerSpy.mockRestore();
+			globalThis.fetch = originalFetch;
+		}
 	});
 });

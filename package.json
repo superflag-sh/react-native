@@ -1,6 +1,6 @@
 {
   "name": "@superflag-sh/react-native",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "React Native SDK for Superflag feature flags",
   "type": "module",
   "main": "./dist/cjs/index.js",
@@ -36,7 +36,7 @@
   "author": "Superflag",
   "license": "MIT",
   "dependencies": {
-    "@superflag-sh/core": "0.2.1"
+    "@superflag-sh/core": "0.4.0"
   },
   "peerDependencies": {
     "react": ">=18",
@@ -47,7 +47,9 @@
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@types/node": "^25.0.3",
     "@types/react": "^18.2.0",
+    "@types/react-test-renderer": "^18.3.1",
     "react": "^18.2.0",
+    "react-test-renderer": "18.3.1",
     "typescript": "^5.0.0"
   },
   "scripts": {
@@ -55,11 +57,10 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test ./src/__tests__",
     "test:watch": "bun test --watch ./src/__tests__",
-    "check:cache-drift": "node scripts/check-cache-drift.mjs",
     "smoke:package": "node scripts/smoke-package.mjs",
     "smoke:hermes": "node scripts/smoke-hermes.mjs",
     "smoke:registry": "node scripts/smoke-registry.mjs",
-    "release:check": "bun run test && bun run typecheck && bun run check:cache-drift && bun run build && bun run smoke:package && bun run smoke:hermes",
+    "release:check": "bun run test && bun run typecheck && bun run build && bun run smoke:package && bun run smoke:hermes",
     "prepack": "bun run build",
     "prepublishOnly": "bun run release:check"
   }

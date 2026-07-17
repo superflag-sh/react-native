@@ -188,7 +188,7 @@ describe("React Native telemetry", () => {
       timestamp: "2026-07-14T12:00:00.000Z",
       sdk: {
         name: "@superflag-sh/react-native",
-        version: "0.3.0",
+        version: "0.4.0",
         platform: "react-native",
       },
       subject: {

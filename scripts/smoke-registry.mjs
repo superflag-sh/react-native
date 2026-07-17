@@ -224,7 +224,7 @@ try {
   const installedManifest = JSON.parse(readFileSync(join(fixture, "node_modules", "@superflag-sh", "react-native", "package.json"), "utf8"))
   const coreManifest = JSON.parse(readFileSync(join(fixture, "node_modules", "@superflag-sh", "core", "package.json"), "utf8"))
   assert(installedManifest.version === version, `Installed ${packageName}@${installedManifest.version}; expected ${version}`)
-  assert(installedManifest.dependencies?.[coreName] === "0.2.1", `SDK must pin exact ${coreName}@0.2.1, received ${installedManifest.dependencies?.[coreName]}`)
+  assert(installedManifest.dependencies?.[coreName] === "0.4.0", `SDK must pin exact ${coreName}@0.4.0, received ${installedManifest.dependencies?.[coreName]}`)
   assert(typeof coreManifest.version === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(coreManifest.version), `Core did not resolve to an exact registry version: ${coreManifest.version}`)
   assert(!/^(?:file|link|workspace):/.test(installedManifest.dependencies?.[coreName] ?? ""), "Published SDK manifest contains a local core dependency")
   const coreLock = lock.packages?.["node_modules/@superflag-sh/core"]

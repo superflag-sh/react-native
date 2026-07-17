@@ -5,15 +5,19 @@ import {
 	runConformanceVectors,
 } from "@superflag-sh/core/conformance";
 import { normalizeConfigResponse } from "../config.js";
-import { evaluateWithCore, resolveEvaluationContext } from "../evaluation.js";
+import {
+  createEvaluationReader,
+  evaluateWithCore,
+  resolveEvaluationContext,
+} from "../evaluation.js";
 import type { ConfigResponse } from "../types.js";
 
 describe("core evaluation adapter", () => {
 	test("passes every canonical core conformance vector", () => {
+		const reader = createEvaluationReader(conformanceConfig);
 		expect(runConformanceVectors().every((result) => result.pass)).toBeTrue();
 		for (const vector of conformanceVectors) {
-			const details = evaluateWithCore(
-				conformanceConfig,
+			const details = reader(
 				vector.context,
 				vector.flagKey,
 				vector.fallback,

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import type { FlagConfig } from "@superflag-sh/core"
 import type { FeatureEvent } from "@superflag-sh/core/events"
-import { createCacheKey, createCacheScope, createPersistedCacheBinding } from "../cache.js"
+import { createCacheKey, createCacheScope, createPersistedCacheBinding } from "@superflag-sh/core"
 import { createClient } from "../client.js"
 import { evaluateWithCore } from "../evaluation.js"
 import type {
@@ -34,6 +34,43 @@ class MemoryStorage implements StorageAdapter {
     this.removed.push(key)
     this.values.delete(key)
   }
+}
+
+function delayCapturedRead(storage: MemoryStorage, delayedKey: string): {
+  started: Promise<void>
+  release: () => void
+} {
+  const read = storage.getItem.bind(storage)
+  let signalStarted: (() => void) | undefined
+  let releaseRead: (() => void) | undefined
+  const started = new Promise<void>((resolve) => { signalStarted = resolve })
+  const gate = new Promise<void>((resolve) => { releaseRead = resolve })
+  storage.getItem = async (key: string) => {
+    const captured = await read(key)
+    if (key !== delayedKey) return captured
+    signalStarted?.()
+    await gate
+    return captured
+  }
+  return { started, release: () => releaseRead?.() }
+}
+
+function delayRejectedRead(storage: MemoryStorage, delayedKey: string): {
+  started: Promise<void>
+  release: () => void
+} {
+  const read = storage.getItem.bind(storage)
+  let signalStarted: (() => void) | undefined
+  let releaseRead: (() => void) | undefined
+  const started = new Promise<void>((resolve) => { signalStarted = resolve })
+  const gate = new Promise<void>((resolve) => { releaseRead = resolve })
+  storage.getItem = async (key: string) => {
+    if (key !== delayedKey) return read(key)
+    signalStarted?.()
+    await gate
+    throw new Error("delayed storage failure")
+  }
+  return { started, release: () => releaseRead?.() }
 }
 
 class FakeAppState implements AppStateAdapter {
@@ -257,8 +294,104 @@ describe("cache and refresh lifecycle", () => {
 
     expect(first).toBe(second)
     expect(fetches).toBe(1)
+    while (!resolveResponse) await Promise.resolve()
     resolveResponse?.(response())
     await Promise.all([initializing, first, second])
+    client.destroy()
+  })
+
+  test("keeps the latest accepted config when the server returns a lower version", async () => {
+    let calls = 0
+    globalThis.fetch = async () => response(calls++ === 0 ? 8 : 7)
+    const { client, states, storage } = setup()
+
+    await client.initialize()
+    await client.refresh()
+
+    expect(states.at(-1)).toMatchObject({
+      configVersion: 8,
+      status: "ready",
+      error: "Rejected config version 7; latest accepted version is 8",
+    })
+    const scope = createCacheScope(CONFIG_URL, "pub_production_test")
+    const binding = createPersistedCacheBinding(scope, {
+      appId: "app-a",
+      environment: "production",
+    })
+    expect(JSON.parse(storage.values.get(createCacheKey(scope, binding)) ?? "{}").version).toBe(8)
+    client.destroy()
+  })
+
+  test("a stale asynchronous cache read cannot overwrite a fresher refresh", async () => {
+    const storage = new MemoryStorage()
+    seedCache(storage, "pub_production_test", 90_000, 1)
+    const scope = createCacheScope(CONFIG_URL, "pub_production_test")
+    const binding = createPersistedCacheBinding(scope, {
+      appId: "app-a",
+      environment: "production",
+    })
+    const delayed = delayCapturedRead(storage, createCacheKey(scope, binding))
+    globalThis.fetch = async () => response(8)
+    const { client, states } = setup({ storage })
+
+    const initializing = client.initialize()
+    await delayed.started
+    await client.refresh()
+    delayed.release()
+    await initializing
+
+    const acceptedVersions = states
+      .map((entry) => entry.configVersion)
+      .filter((version): version is number => version !== null)
+    expect(acceptedVersions).not.toContain(1)
+    expect(states.at(-1)?.configVersion).toBe(8)
+    client.destroy()
+  })
+
+  test("a delayed malformed cache read cannot delete a fresher published cache", async () => {
+    const storage = new MemoryStorage()
+    seedCache(storage, "pub_production_test", 90_000, 1)
+    const scope = createCacheScope(CONFIG_URL, "pub_production_test")
+    const binding = createPersistedCacheBinding(scope, {
+      appId: "app-a",
+      environment: "production",
+    })
+    const cacheKey = createCacheKey(scope, binding)
+    storage.values.set(cacheKey, "{malformed")
+    const delayed = delayCapturedRead(storage, cacheKey)
+    globalThis.fetch = async () => response(8)
+    const { client } = setup({ storage })
+
+    const initializing = client.initialize()
+    await delayed.started
+    await client.refresh()
+    delayed.release()
+    await initializing
+
+    expect(JSON.parse(storage.values.get(scope.bindingKey) ?? "{}")).toEqual(binding)
+    expect(JSON.parse(storage.values.get(cacheKey) ?? "{}").version).toBe(8)
+    client.destroy()
+  })
+
+  test("a delayed failed binding read cannot clear a fresher published binding", async () => {
+    const storage = new MemoryStorage()
+    const scope = createCacheScope(CONFIG_URL, "pub_production_test")
+    const binding = createPersistedCacheBinding(scope, {
+      appId: "app-a",
+      environment: "production",
+    })
+    const delayed = delayRejectedRead(storage, scope.bindingKey)
+    globalThis.fetch = async () => response(8)
+    const { client } = setup({ storage })
+
+    const initializing = client.initialize()
+    await delayed.started
+    await client.refresh()
+    delayed.release()
+    await initializing
+
+    expect(JSON.parse(storage.values.get(scope.bindingKey) ?? "{}")).toEqual(binding)
+    expect(JSON.parse(storage.values.get(createCacheKey(scope, binding)) ?? "{}").version).toBe(8)
     client.destroy()
   })
 

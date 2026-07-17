@@ -19,7 +19,6 @@ export {
   useSuperflagClient,
   useTypedFlag,
 } from "./hooks.js"
-export type { UseFlagsResult } from "./hooks.js"
 export type {
   AppStateAdapter,
   AppStateSubscription,
@@ -65,6 +64,7 @@ export type {
   TypedFlagValues,
   TypedSuperflagClient,
   TypedSuperflagHooks,
+  UseFlagsResult,
   TelemetryBackpressurePolicy,
   TelemetryDiagnostic,
   TelemetryEnqueueResult,

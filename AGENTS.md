@@ -29,7 +29,8 @@ Run focused tests first, then:
 bun run release:check
 ```
 
-The release gate includes cache drift, packed-package, Expo/Metro, and Hermes smoke.
+The release gate includes the shared-core cache contract, packed-package, Expo/Metro,
+and Hermes smoke.
 Use `bun run smoke:registry` only after authorized publication of an exact version and
 prove no local fallback. Publish the required core version first. Do not commit, push,
 publish, or tag without explicit approval.

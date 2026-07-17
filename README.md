@@ -208,6 +208,7 @@ Initialization is cache-first:
 3. An older cache is rejected and removed.
 4. Offline or retryable server failures retain an allowed cached config.
 5. ETags are sent only for a validated cache bound to the active endpoint, client-key fingerprint, app, and environment.
+6. A same-source response with a lower config version is rejected so delayed cache reads or network responses cannot replace the latest known config.
 
 Refreshes use bounded exponential retry. Manual, TTL, foreground, and reconnect triggers share one in-flight request. Destroying the provider aborts guarded fetches and removes AppState/network listeners plus TTL, max-stale, and retry timers.
 
@@ -223,11 +224,11 @@ interface StorageAdapter {
 }
 ```
 
-Cache entries remain schema-versioned and identity-bound. Raw client keys are never persisted.
+Cache entries remain schema-versioned and identity-bound. Raw client keys are never persisted. Portable cache identity comes from the shared `@superflag-sh/core/cache` module; this adapter owns AsyncStorage persistence and mobile lifecycle policy.
 
 ## Package targets
 
-The package ships ES2019 native ESM (`react-native` and `import`), CommonJS (`require`), and one declaration tree. Release checks pack the SDK into clean consumers, resolve its exact core dependency from npm, validate ESM/CommonJS/NodeNext imports and telemetry behavior, bundle through Expo Metro, and compile the production bundle to Hermes bytecode.
+The package ships ES2019 native ESM (`react-native` and `import`), CommonJS (`require`), and one declaration tree. Release checks pack the SDK and exact installed core into clean consumers, validate ESM/CommonJS/NodeNext imports and telemetry behavior, bundle through Expo Metro, and compile the production bundle to Hermes bytecode. `bun run smoke:registry` separately proves exact npm resolution after publication.
 
 ## License
 

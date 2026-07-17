@@ -6,6 +6,7 @@ import type {
 	SuperflagClient,
 	SuperflagState,
 } from "./types.js";
+import type { EvaluationReader } from "./evaluation.js";
 
 const noopRefresh = async (): Promise<void> => {};
 
@@ -28,6 +29,7 @@ export const initialState: SuperflagState = {
 };
 
 export interface SuperflagContextValue extends SuperflagState {
+	evaluationReader: EvaluationReader | null;
 	emitEvaluation(event: EvaluationEvent, exposed: boolean): void;
 	emitExposure(event: ExposureEvent): void;
 	emitDiagnostic(event: DiagnosticEvent): void;

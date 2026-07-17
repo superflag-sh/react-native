@@ -16,7 +16,7 @@ import type {
   TelemetryShutdownResult,
   TelemetryTransport,
 } from "@superflag-sh/core"
-import { createCacheScope, sha256 } from "./cache.js"
+import { createCacheScope, sha256 } from "@superflag-sh/core"
 import type {
   DiagnosticEvent,
   EvaluationContext,
@@ -34,7 +34,7 @@ import type {
 const TELEMETRY_SCHEMA_VERSION = 1 as const
 const SDK = {
   name: "@superflag-sh/react-native",
-  version: "0.3.0",
+  version: "0.4.0",
   platform: "react-native",
 } as const
 const MAX_EXPOSURE_KEYS = 10_000

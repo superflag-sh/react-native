@@ -6,7 +6,7 @@ import {
   createCacheScope,
   createPersistedCacheBinding,
   sha256,
-} from "../cache.js"
+} from "@superflag-sh/core"
 import { createClient } from "../client.js"
 import type { CachedConfig, ConfigResponse, FlagConfig, StorageAdapter, SuperflagState } from "../types.js"
 import { SHA256_TEST_VECTORS } from "./cache-vectors.js"
