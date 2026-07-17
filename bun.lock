@@ -150,7 +150,7 @@
 
     "@sinonjs/fake-timers": ["@sinonjs/fake-timers@10.3.0", "", { "dependencies": { "@sinonjs/commons": "^3.0.0" } }, "sha512-V4BG07kuYSUkTCSBHG8G8TNhM+F19jXFWnQtzj+we8DrkpSBCee9Z3Ms8yiGer/dlmhe35/Xdgyo3/0rQKg7YA=="],
 
-    "@superflag-sh/core": ["@superflag-sh/core@0.4.0", "", { "peerDependencies": { "@openfeature/server-sdk": ">=1" }, "optionalPeers": ["@openfeature/server-sdk"] }, "sha512-I8FMOO0Hd9NOWZwVS6uoKtALOJU8fssym16pqwFIj/Hx30kzDlg25aMeaZhWTA0IU+iiI2zCLsH0j7/nxELI/g=="],
+    "@superflag-sh/core": ["@superflag-sh/core@0.4.0", "", { "peerDependencies": { "@openfeature/server-sdk": ">=1" }, "optionalPeers": ["@openfeature/server-sdk"] }, "sha512-M52/MjzE+hOP+qDrceDsX4085cf0QXwDDdUTln+Di2+wIGP7VRBTaaRZUzDW8hh9WhBT710OhYH/T+Fui4sC7Q=="],
 
     "@types/babel__core": ["@types/babel__core@7.20.5", "", { "dependencies": { "@babel/parser": "^7.20.7", "@babel/types": "^7.20.7", "@types/babel__generator": "*", "@types/babel__template": "*", "@types/babel__traverse": "*" } }, "sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA=="],
 
